@@ -9,8 +9,9 @@ description: >-
   problems.
 license: AGPL-3.0-or-later
 compatibility: >-
-  Nextcloud 33, 34 or 35 with admin (occ) access; local providers additionally need AppAPI with a working
-  deploy daemon. Last verified with Nextcloud master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.3, llm2 2.8.0.
+  Nextcloud 33–36 with admin (occ) access; local providers additionally need AppAPI with a working deploy
+  daemon. Last verified with Nextcloud master (36), AppAPI 36.0.0-dev.0, HaRP 0.4.4, llm2 2.8.0,
+  integration_openai, on 2026-08-26.
 ---
 
 # The Nextcloud AI stack
@@ -30,9 +31,11 @@ Three layers, and almost every support question is really about the boundary bet
 
 1. Installing or extending the stack: [references/ai-stack.md](references/ai-stack.md). It has the install
    order, the acceptance checks, and the model storage and GPU facts that decide your hardware.
-2. Something is broken: [references/ai-troubleshooting.md](references/ai-troubleshooting.md), which starts
+2. OpenAI integration (OpenAI or OpenAI-compatible APIs) — prefer this over local llm2 when you lack
+   GPU/disk for multi-GB models: [references/openai-integration.md](references/openai-integration.md).
+3. Something is broken: [references/ai-troubleshooting.md](references/ai-troubleshooting.md), which starts
    from the symptom and the one command that splits the problem in half.
-3. Collect state first: [assets/ai-doctor.sh](assets/ai-doctor.sh) prints registered task types, provider
+4. Collect state first: [assets/ai-doctor.sh](assets/ai-doctor.sh) prints registered task types, provider
    apps, ExApp init progress, stuck tasks and background-job health.
 
 ## Facts that save hours
@@ -52,12 +55,19 @@ Three layers, and almost every support question is really about the boundary bet
   in the AI apps is at fault.
 - Compute device is a property of the **daemon**, not the app: register the daemon with
   `--compute_device cuda|rocm` before deploying GPU providers.
-- On the Nextcloud 35 line, several AI ExApps have no release in the app store feed yet, so they install from
-  a manifest instead of the store.
+- On the Nextcloud 35+ dev line, several AI ExApps have no release in the app store feed yet, so they install
+  from a manifest instead of the store. Manifest `max-version` and PHP apps like Assistant may also lag the
+  server major — bump a local copy (see ai-stack.md).
+- Stock llm2 init downloads multiple multi-GB models. On Cloud Agents and CPU hosts without that budget, use
+  [openai-integration.md](references/openai-integration.md) instead of registering llm2.
+- `--info-xml` paths must be readable by the Nextcloud PHP process (inside the container on docker-dev).
+- PHP apps from source (Assistant, `integration_openai`, …) need `npm ci && npm run build` after
+  `composer install`; git does not ship the Vite `js/` / `css/` output.
 
 ## Files
 
 - [references/ai-stack.md](references/ai-stack.md): install, verify, operate, size.
+- [references/openai-integration.md](references/openai-integration.md): `integration_openai` + API keys / URLs.
 - [references/ai-troubleshooting.md](references/ai-troubleshooting.md): symptom-first diagnosis.
 - [assets/ai-doctor.sh](assets/ai-doctor.sh): read-only state collector.
 - Deploying and managing the provider ExApps themselves:
