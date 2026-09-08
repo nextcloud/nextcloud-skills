@@ -18,8 +18,8 @@ hosts and AIO have their own runbooks: [kubernetes.md](../../exapp-operations/re
 [remote-daemon.md](../../exapp-operations/references/remote-daemon.md),
 [aio.md](../../exapp-operations/references/aio.md).
 
-Last verified against: Nextcloud master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.3, nextcloud-docker-dev df4ca69,
-on 2026-08-04; Stage 8 with chrome-devtools-mcp 1.7.0 on 2026-08-18.
+Last verified against: Nextcloud master (36), AppAPI 36.0.0-dev.0, HaRP 0.4.5, nextcloud-docker-dev d0d1016,
+on 2026-09-08; Stage 8 with chrome-devtools-mcp 1.7.0 on 2026-08-18.
 
 ## If you are an AI agent, read this first
 
@@ -28,7 +28,8 @@ on 2026-08-04; Stage 8 with chrome-devtools-mcp 1.7.0 on 2026-08-18.
 - The environment is disposable, but its databases are not yours to destroy: never run `docker compose down -v`
   and never delete `workspace/` or named volumes without explicit human approval.
 - Never edit tracked files of the nextcloud-docker-dev checkout for this setup. The whole AppAPI overlay lives in
-  files that are untracked by design (`.env`, `docker-compose.override.yml`, `data/nginx/vhost.d/`).
+  files that are untracked by design (`.env`, `docker-compose.override.yml`, `data/nginx/vhost.d/`,
+  `data/harp.key`).
 - All state is discoverable by command (`docker compose ps`, `./scripts/occ.sh`, `docker logs`); verify state
   rather than assuming it.
 - Kill development processes by exact PID only; on setups where ExApps run in Kubernetes their processes are
@@ -173,8 +174,15 @@ If it fails:
 
 Goal: the HaRP deploy-daemon container running next to Nextcloud.
 
-First pick a dev-only shared key: any ASCII string; `<YOUR_DEV_KEY>` below stands for it everywhere (Stage 4 and
-Stage 6 must use the byte-identical value; a mismatch is the single most common install failure).
+First create the dev-only shared key as a file. HaRP reads it through `HP_SHARED_KEY_FILE` and Stage 6 reads
+the same file, so the two cannot drift (a mismatch is the single most common install failure). A file rather
+than an env value because `docker compose config` prints env values in clear, and two services in the tracked
+compose file load the whole `.env` through `env_file`.
+
+```bash
+(umask 077; tr -dc A-Za-z0-9 </dev/urandom | head -c 32 > data/harp.key)   # any ASCII string works
+echo data/harp.key >> .git/info/exclude
+```
 
 Create `docker-compose.override.yml` in the repository root (docker compose loads it automatically; it stays
 untracked, optionally list it in `.git/info/exclude`):
@@ -185,13 +193,14 @@ services:
     image: ghcr.io/nextcloud/nextcloud-appapi-harp:release
     restart: unless-stopped
     environment:
-      HP_SHARED_KEY: "<YOUR_DEV_KEY>"
+      HP_SHARED_KEY_FILE: /run/secrets/harp.key
       NC_INSTANCE_URL: "http://nextcloud.local"
       HP_TRUSTED_PROXY_IPS: "192.168.21.0/24"   # DOCKER_SUBNET from .env
       HP_LOG_LEVEL: "info"
     volumes:
       - ${DOCKER_SOCKET-/var/run/docker.sock}:/var/run/docker.sock
       - harp-certs:/certs
+      - ./data/harp.key:/run/secrets/harp.key:ro
 
 volumes:
   harp-certs:
@@ -205,6 +214,8 @@ Notes:
 - No `container_name`: compose names it `master-appapi-harp-1`, and the service name still provides the
   `appapi-harp` DNS alias on the compose network, which is what every later stage uses. A fixed name only
   invites collisions with older HaRP containers.
+- HaRP exits at start when the key file is missing or empty, so a mistake fails at `up`, not at the first
+  ExApp install. It re-reads the file on every start (HaRP 0.3.1+), which is what makes rotation a restart.
 - FRP TLS stays on (the default): HaRP generates its certificates itself and AppAPI installs them into ExApp
   containers at deploy time; nothing to configure.
 - The full `HP_*` reference lives in the HaRP README (Environment Variables section); nothing else needs tuning
@@ -214,7 +225,7 @@ Verify:
 
 ```bash
 docker compose ps appapi-harp
-docker compose exec nextcloud curl -s -H "harp-shared-key: <YOUR_DEV_KEY>" http://appapi-harp:8780/exapps/app_api/info
+docker compose exec nextcloud curl -s -H "harp-shared-key: $(cat data/harp.key)" http://appapi-harp:8780/exapps/app_api/info
 ```
 
 Expected: status `Up ... (healthy)` and a JSON body containing `"docker": true` (the `version` field shows the
@@ -228,8 +239,11 @@ Create `data/nginx/vhost.d/nextcloud.local` (the file name must exactly equal th
 with `DOMAIN_SUFFIX`; this per-vhost snippet mechanism is the documented nginx-proxy customization path):
 
 ```nginx
+# Resolve HaRP at request time: with a literal proxy_pass hostname nginx refuses to start
+# whenever the appapi-harp container is absent, and every vhost goes down with it.
+set $harp_upstream http://appapi-harp:8780;
 location /exapps/ {
-    proxy_pass http://appapi-harp:8780/exapps/;
+    proxy_pass $harp_upstream;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -248,6 +262,12 @@ a reload re-reads but never regenerates.
 docker compose restart proxy
 ```
 
+The `set` line is what keeps nginx up when HaRP is not running. nginx resolves a literal `proxy_pass` hostname
+once at startup and refuses to start when it cannot (`[emerg] host not found in upstream "appapi-harp"`), which
+takes every URL of every instance down, `status.php` included, until HaRP is back and the proxy restarts. A
+variable is resolved per request through the `resolver 127.0.0.11` line nginx-proxy already generates, so HaRP
+being down degrades to a 502 on `/exapps/` only, and recovery needs no proxy restart.
+
 Verify:
 
 ```bash
@@ -261,7 +281,7 @@ If it fails:
   active: the vhost file name does not match the virtual host, or the proxy was not restarted after the file was
   created (check with `docker compose exec proxy grep vhost.d /etc/nginx/conf.d/default.conf`).
 - `404` with an **nginx** error page: the vhost itself is wrong (rare; check `VIRTUAL_HOST`/`DOMAIN_SUFFIX`).
-- `502`: HaRP container down, or wrong service name in the snippet.
+- `502`: HaRP container down (start it; no proxy restart needed), or wrong service name in the snippet.
 
 ## Stage 6: register the deploy daemons
 
@@ -272,7 +292,7 @@ Goal: two daemons: HaRP (docker-install) for production-like deploys, and manual
 ./scripts/occ.sh nextcloud -- app_api:daemon:register \
     local-harp "HaRP (local)" docker-install http appapi-harp:8780 http://nextcloud.local \
     --net master_default \
-    --harp --harp_frp_address appapi-harp:8782 --harp_shared_key "<YOUR_DEV_KEY>" \
+    --harp --harp_frp_address appapi-harp:8782 --harp_shared_key "$(cat data/harp.key)" \
     --set-default
 
 # Manual-install daemon (the ExApp process runs on your machine; its port comes from app registration)
@@ -283,7 +303,9 @@ Goal: two daemons: HaRP (docker-install) for production-like deploys, and manual
 Notes:
 - Protocol must be `http` for HaRP's port 8780 (8781 is the https frontend). Registering `https` against 8780
   fails later with "Connection refused for URI https://...".
-- Re-registering an existing daemon name is a no-op; `app_api:daemon:unregister` first to change values.
+- Re-registering an existing daemon name is a no-op. To change values, and in particular after changing the key,
+  follow [Rotating the shared key](#rotating-the-shared-key): a plain `daemon:unregister` refuses while the
+  daemon holds ExApps.
 - Full flag reference: [operations.md](../../exapp-operations/references/operations.md#5-occ-app_apidaemonregister-reference).
 
 Verify:
@@ -407,6 +429,27 @@ Alternatives exist (`@playwright/mcp` is the other common one); this stage docum
 | One service's config drifted | `docker compose up -d --force-recreate <service>` (containers are disposable; volumes hold state) |
 | Failed ExApp install left a container behind | `./scripts/occ.sh nextcloud -- app_api:app:unregister <appid> --force` (`--force` because unregister first tries to disable the app, which fails when it is unreachable; add `--rm-data` to also drop its data volume) |
 | Full reset (DESTROYS all instances' data) | Requires explicit human approval: `docker compose down -v`, then re-run from Stage 2 |
+| Shared key changed | See [Rotating the shared key](#rotating-the-shared-key); the order matters |
+
+### Rotating the shared key
+
+Write the new value into `data/harp.key` and `docker compose up -d appapi-harp`; HaRP reads the file on every
+start. From that moment AppAPI still signs with the old key and HaRP answers 401 to it, `daemon:unregister`
+refuses while the daemon holds ExApps ("contains N ExApps, please remove them first") and has no `--force`,
+and the ExApps cannot be removed the normal way because that goes through HaRP. The order that works:
+
+```bash
+./scripts/occ.sh nextcloud -- app_api:app:unregister <appid> --force --silent   # per ExApp; drops the row without asking HaRP
+./scripts/occ.sh nextcloud -- app_api:daemon:unregister local-harp
+./scripts/occ.sh nextcloud -- app_api:daemon:register \
+    local-harp "HaRP (local)" docker-install http appapi-harp:8780 http://nextcloud.local \
+    --net master_default \
+    --harp --harp_frp_address appapi-harp:8782 --harp_shared_key "$(cat data/harp.key)" \
+    --set-default
+```
+
+Then redeploy the ExApps (Stage 7's `make register-docker` for the reference app); AppAPI removes the orphaned
+containers itself. Daemon options added later (`app_api:daemon:registry:add`, for example) must be added again.
 
 ## Troubleshooting (symptom first)
 
@@ -421,6 +464,7 @@ Alternatives exist (`@playwright/mcp` is the other common one); this stage docum
 | `/exapps/` returns an Apache 404 page | Fell through to Nextcloud: vhost.d file name wrong, or the proxy was never restarted after the file was created (Stage 5) |
 | `/exapps/<app>/<declared-route>` returns 404 | Route not declared in the app's manifest, or the app sits on a non-HaRP daemon (manual apps are served at `/index.php/apps/app_api/proxy/<appid>/...`) |
 | `/exapps/` returns 502 | HaRP container down, or a browser request to an infrastructure route (`/heartbeat`, `/init`, `/enabled`), which is blocked by design |
+| Every URL refuses the connection, `status.php` too, while Nextcloud logs look fine | nginx did not start: the `/exapps/` snippet names `appapi-harp` in a literal `proxy_pass` and the container is absent (`docker compose logs proxy` shows `[emerg] host not found in upstream`). Use the Stage 5 `set $harp_upstream` form; until then, start HaRP and the proxy recovers within seconds |
 | Ports 80/443 busy on the host | Another web server; stop it or change the bind/port settings in `.env` |
 | An ExApp sends a notification, AppAPI answers 200, nothing ever appears | The `notifications` app is not enabled: git checkouts do not include it and the app store has no build for a development version; do Stage 3 |
 

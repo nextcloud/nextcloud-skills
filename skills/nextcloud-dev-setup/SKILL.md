@@ -9,7 +9,7 @@ license: AGPL-3.0-or-later
 compatibility: >-
   Linux or macOS with Docker Engine, docker compose v2, git, curl, make and sudo; 4+ vCPUs, 8+ GB RAM, 40+ GB
   disk recommended. macOS runs the runbook unmodified; see references/macos.md. Last verified with Nextcloud
-  master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.4.
+  master (36), AppAPI 36.0.0-dev.0, HaRP 0.4.5.
 ---
 
 # Nextcloud development environment setup
@@ -33,9 +33,12 @@ endpoints answer over `http://nextcloud.local/exapps/...`, the environment is do
 - Never run `docker compose down -v` and never delete `workspace/` or named volumes without explicit human
   approval; they hold every instance's data.
 - Never edit tracked files of the nextcloud-docker-dev checkout. The whole AppAPI overlay lives in untracked
-  files (`.env`, `docker-compose.override.yml`, `data/nginx/vhost.d/`).
-- The HaRP shared key must be byte-identical between the compose override (`HP_SHARED_KEY`) and the
-  `daemon:register --harp_shared_key` value; a mismatch is the number one install failure.
+  files (`.env`, `docker-compose.override.yml`, `data/nginx/vhost.d/`, `data/harp.key`).
+- The HaRP shared key lives in one untracked file, `data/harp.key`: HaRP mounts it as `HP_SHARED_KEY_FILE` and
+  `daemon:register --harp_shared_key "$(cat data/harp.key)"` reads the same file. A mismatch is the number one
+  install failure, and changing the key has a fixed order (Rotating the shared key in the runbook).
+- Keep the `set $harp_upstream` line in the `/exapps/` snippet: a literal `proxy_pass` hostname stops nginx
+  from starting whenever HaRP is absent, which takes every instance down, `status.php` included.
 - After creating a new `data/nginx/vhost.d/<host>` file, `docker compose restart proxy`; a plain nginx reload
   never picks up a file that did not exist when the config was generated.
 - Kill development processes by exact PID only, and use dev-only secrets you never reuse elsewhere.

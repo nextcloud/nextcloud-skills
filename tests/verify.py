@@ -19,6 +19,7 @@ Configuration (environment):
     NC_URL          Nextcloud base URL                    (default: http://nextcloud.local)
     DAEMON          docker-install HaRP daemon name       (default: local-harp)
     HARP_CONTAINER  HaRP container name                   (default: appapi-harp)
+    PROXY_CONTAINER nginx-proxy container name            (default: master-proxy-1)
     NC_ADMIN / NC_ADMIN_PASS   admin credentials for OCS checks (optional)
     NC_APPS_DIR     host path of a directory on the instance's apps_paths (optional; enables the
                     slow nextcloud-php-app check, e.g. workspace/server/apps-extra)
@@ -49,6 +50,7 @@ OCC = os.environ.get("OCC", f"docker exec -u www-data {NC_CONTAINER} php occ")
 NC_URL = os.environ.get("NC_URL", "http://nextcloud.local").rstrip("/")
 DAEMON = os.environ.get("DAEMON", "local-harp")
 HARP_CONTAINER = os.environ.get("HARP_CONTAINER", "appapi-harp")
+PROXY_CONTAINER = os.environ.get("PROXY_CONTAINER", "master-proxy-1")
 NC_ADMIN = os.environ.get("NC_ADMIN", "")
 NC_ADMIN_PASS = os.environ.get("NC_ADMIN_PASS", "")
 NC_APPS_DIR = os.environ.get("NC_APPS_DIR", "")
@@ -99,8 +101,11 @@ def harp_info():
     """HaRP /info reports a semver version and Docker support."""
     env = container_env(HARP_CONTAINER)
     key = env.get("HP_SHARED_KEY", "")
+    if not key and env.get("HP_SHARED_KEY_FILE"):
+        _, key = run(["docker", "exec", HARP_CONTAINER, "cat", env["HP_SHARED_KEY_FILE"]])
+        key = key.strip()
     if not key:
-        raise Skip("HP_SHARED_KEY not readable from the container")
+        raise Skip("neither HP_SHARED_KEY nor HP_SHARED_KEY_FILE readable from the container")
     _, out = run(["docker", "exec", HARP_CONTAINER, "curl", "-s", "--max-time", "10",
                   "-H", f"harp-shared-key: {key}",
                   "http://127.0.0.1:8780/exapps/app_api/info"], check=True)
@@ -152,6 +157,23 @@ def public_exapps_path():
         f"expected 401, got {code}: 404 means the rule is missing, 502 means it points nowhere. "
         "ExApp installs fail without this path")
     return "401 through the public URL"
+
+
+def proxy_survives_harp_absence():
+    """The proxy config is valid and the /exapps/ rule resolves HaRP per request, so nginx starts without it."""
+    host = NC_URL.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    code, out = run(["docker", "exec", PROXY_CONTAINER, "nginx", "-t"])
+    assert code == 0, f"nginx -t failed in {PROXY_CONTAINER}: {out.strip()[-200:]}"
+    code, snippet = run(["docker", "exec", PROXY_CONTAINER, "cat", f"/etc/nginx/vhost.d/{host}"])
+    assert code == 0, f"no /etc/nginx/vhost.d/{host} in {PROXY_CONTAINER} (Stage 5)"
+    targets = [line.split(None, 1)[1].rstrip(";") for line in snippet.splitlines()
+               if line.strip().startswith("proxy_pass")]
+    assert targets, "no proxy_pass in the vhost snippet"
+    literal = [t for t in targets if not t.startswith("$")]
+    assert not literal, (
+        f"literal proxy_pass {literal[0]}: nginx refuses to start whenever that host is absent, "
+        "taking every instance down; use the set $harp_upstream form from Stage 5")
+    return "nginx -t ok; proxy_pass resolves at request time"
 
 
 def notifications_app_enabled():
@@ -362,7 +384,8 @@ CHECKS = {
     "exapp-operations": [occ_command_surface, daemon_register_is_noop, daemon_registry_roundtrip,
                          public_exapps_path],
     "nextcloud-ai-stack": [taskprocessing_surface, tasktypes_endpoint, cron_is_recent],
-    "nextcloud-dev-setup": [public_exapps_path, harp_info, notifications_app_enabled],
+    "nextcloud-dev-setup": [public_exapps_path, proxy_survives_harp_absence, harp_info,
+                            notifications_app_enabled],
     "exapp-development": [reference_exapp_lifecycle],
     "nextcloud-php-app": [reference_php_app_lifecycle],
 }
