@@ -154,6 +154,16 @@ def public_exapps_path():
     return "401 through the public URL"
 
 
+def notifications_app_enabled():
+    """The notifications app is enabled; without it AppAPI's notification endpoint delivers to nobody."""
+    _, out = occ("app:list", check=True)
+    enabled = out.split("Disabled:", 1)[0]
+    assert "  - notifications:" in enabled, (
+        "notifications app is not enabled: server git checkouts do not ship it and the app store has "
+        "no build for a development version (dev-environment.md Stage 3)")
+    return "notifications enabled"
+
+
 def occ_command_surface():
     """Every occ command the operations runbook documents exists."""
     _, out = occ("list app_api", check=True)
@@ -352,7 +362,7 @@ CHECKS = {
     "exapp-operations": [occ_command_surface, daemon_register_is_noop, daemon_registry_roundtrip,
                          public_exapps_path],
     "nextcloud-ai-stack": [taskprocessing_surface, tasktypes_endpoint, cron_is_recent],
-    "nextcloud-dev-setup": [public_exapps_path, harp_info],
+    "nextcloud-dev-setup": [public_exapps_path, harp_info, notifications_app_enabled],
     "exapp-development": [reference_exapp_lifecycle],
     "nextcloud-php-app": [reference_php_app_lifecycle],
 }

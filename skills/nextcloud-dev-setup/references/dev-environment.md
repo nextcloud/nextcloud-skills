@@ -53,23 +53,29 @@ adjustments that turn out to be unnecessary.
 
 ## Stage 1: clone and bootstrap
 
-Goal: nextcloud-docker-dev checked out, `.env` generated, Nextcloud server source and app_api cloned.
+Goal: nextcloud-docker-dev checked out, `.env` generated, Nextcloud server source, app_api and the notifications
+app cloned.
 
 ```bash
 git clone https://github.com/nextcloud/nextcloud-docker-dev
 cd nextcloud-docker-dev
-./bootstrap.sh app_api
+./bootstrap.sh app_api notifications
 ```
 
 Notes:
 - `bootstrap.sh` writes `.env` (project name `master`, domain suffix `.local`, `PROTOCOL=http`, mysql), appends
   the `*.local` hostnames to `/etc/hosts` (needs sudo; a dnsmasq wildcard `address=/.local/127.0.0.1` is the
   alternative), clones `nextcloud/server` (shallow) into `workspace/server` plus a default app set, and because of
-  the `app_api` argument also clones `nextcloud/app_api` into `workspace/server/apps-extra/app_api` and adds it to
-  `NEXTCLOUD_AUTOINSTALL_APPS`.
+  the `app_api notifications` arguments also clones `nextcloud/app_api` and `nextcloud/notifications` into
+  `workspace/server/apps-extra/` and adds both to `NEXTCLOUD_AUTOINSTALL_APPS`.
+- `notifications` is asked for explicitly because it is not part of the server repository: it is a separate
+  repository that ships bundled only in release tarballs, and the app store has no build for a development
+  version. Without it, an ExApp's notification calls through AppAPI return 200 and deliver nothing (Stage 3).
 - First run only: if `.env` already exists, `bootstrap.sh` validates and exits; arguments do nothing. On an
   existing checkout instead run:
-  `git clone https://github.com/nextcloud/app_api workspace/server/apps-extra/app_api` and enable it in Stage 3.
+  `git clone https://github.com/nextcloud/app_api workspace/server/apps-extra/app_api` and
+  `git clone https://github.com/nextcloud/notifications workspace/server/apps-extra/notifications`, then enable
+  both in Stage 3.
 - app_api needs no build step for runtime use (built JS is committed; composer/npm are only for developing app_api
   itself, see `AGENTS.md` in the [app_api repository](https://github.com/nextcloud/app_api)).
 
@@ -78,10 +84,12 @@ Verify:
 ```bash
 grep -E "COMPOSE_PROJECT_NAME|DOMAIN_SUFFIX|PROTOCOL" .env
 test -d workspace/server/apps-extra/app_api && echo app_api-cloned
+test -d workspace/server/apps-extra/notifications && echo notifications-cloned
 python3 -c "import socket; print(socket.gethostbyname('nextcloud.local'))"
 ```
 
 Expected: `COMPOSE_PROJECT_NAME=master`, `DOMAIN_SUFFIX=.local`, `PROTOCOL=http`; `app_api-cloned`;
+`notifications-cloned`;
 `nextcloud.local` resolving to a loopback address (`127.0.0.1`). An unresolvable name raises
 `socket.gaierror`. (The resolution check is written in Python because `getent` does not exist on macOS.)
 
@@ -123,21 +131,43 @@ If it fails:
   wait loop or install errors.
 - 502/503: `docker compose ps`; confirm `proxy` and `nextcloud` are both up.
 
-## Stage 3: enable AppAPI
+## Stage 3: enable AppAPI and the notifications app
 
 ```bash
 ./scripts/occ.sh nextcloud -- app:enable app_api
+docker compose exec --user "$(id -u):$(id -g)" -e COMPOSER_HOME=/tmp/composer \
+    -w /var/www/html/apps-extra/notifications nextcloud composer install --no-dev
+./scripts/occ.sh nextcloud -- app:enable notifications
 ```
 
-(No-op if autoinstall already enabled it via the bootstrap argument.)
+Notes:
+- `app:enable app_api` is a no-op if autoinstall already enabled it via the bootstrap argument.
+- Autoinstall cannot enable `notifications`: the git checkout ships the `composer/` autoloader but no `vendor/`,
+  and `app:enable` dies with `Failed opening required '.../notifications/composer/../vendor/autoload.php'`.
+  `composer install` inside the container supplies it (the image has composer); `--user` keeps the bind-mounted
+  files owned by you instead of root.
+- Why the app matters here: AppAPI's notification endpoint (`POST /ocs/v2.php/apps/app_api/api/v1/notification`)
+  hands the notification to the core notification manager, which delivers to whichever notifier apps are
+  registered. With none, it delivers to nobody: the ExApp gets 200 and nothing is stored or shown (verified
+  against `oc_notifications`), so a developer testing notifications on this instance would chase a bug that is
+  not in their code.
 
 Verify:
 
 ```bash
 ./scripts/occ.sh nextcloud -- app_api:daemon:list
+./scripts/occ.sh nextcloud -- app:list | grep -E '^\s+- notifications:'
 ```
 
-Expected: the command runs (empty daemon list is fine at this point).
+Expected: the first command runs (empty daemon list is fine at this point); the second prints
+`- notifications: <version>` (it is listed under `Enabled:`; the grep would also match a `Disabled:` entry, so
+confirm the section if in doubt).
+
+If it fails:
+- `app:enable notifications` fails with the `vendor/autoload.php` error: the `composer install` step was skipped
+  or ran in the wrong directory; re-run it and enable again.
+- `notifications` is missing from `apps-extra/`: the Stage 1 bootstrap ran without the argument (an existing
+  checkout ignores arguments); clone it as described in Stage 1 and repeat this stage.
 
 ## Stage 4: add HaRP
 
@@ -392,6 +422,7 @@ Alternatives exist (`@playwright/mcp` is the other common one); this stage docum
 | `/exapps/<app>/<declared-route>` returns 404 | Route not declared in the app's manifest, or the app sits on a non-HaRP daemon (manual apps are served at `/index.php/apps/app_api/proxy/<appid>/...`) |
 | `/exapps/` returns 502 | HaRP container down, or a browser request to an infrastructure route (`/heartbeat`, `/init`, `/enabled`), which is blocked by design |
 | Ports 80/443 busy on the host | Another web server; stop it or change the bind/port settings in `.env` |
+| An ExApp sends a notification, AppAPI answers 200, nothing ever appears | The `notifications` app is not enabled: git checkouts do not include it and the app store has no build for a development version; do Stage 3 |
 
 More production-shaped symptoms:
 [operations.md troubleshooting](../../exapp-operations/references/operations.md#10-troubleshooting-symptom-first).
