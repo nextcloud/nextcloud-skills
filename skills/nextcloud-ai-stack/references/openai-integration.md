@@ -9,15 +9,15 @@ A detailed runbook, part of the [nextcloud-ai-stack](../SKILL.md) skill. Local E
 [ai-stack.md](ai-stack.md); this page covers **`integration_openai`**, the PHP app that talks to OpenAI or any
 OpenAI-compatible HTTP API (LocalAI, Ollama, and similar).
 
-Last verified against: Nextcloud master (36), `integration_openai` from the app store / git, with a
-server-wide API key against an OpenAI-compatible endpoint, on 2026-08-26.
+Last verified against: Nextcloud master (36), `integration_openai` 5.0.0 from the app store, with a
+server-wide API key against **OpenAI** (empty `url`, OpenAI defaults), on 2026-08-26.
 
 ## What you need
 
 | Requirement | Notes |
 |---|---|
 | Nextcloud + admin/`occ` | Same instance the Assistant / Task Processing UI uses |
-| `integration_openai` app | Store install when compatible; otherwise clone into `apps-extra` and bump `max-version` like Assistant |
+| `integration_openai` app | Store install; on master use `occ app:enable … --force` when `max-version` lags (see below) |
 | API base URL | Empty for OpenAI defaults, or the **OpenAI-compatible** root including `/v1` when the vendor uses that layout |
 | API key (or basic auth) | Admin-wide key via `occ config:app:set … --sensitive`, or per-user in personal settings |
 | Working cron / background jobs | Integration providers are **synchronous**; `occ taskprocessing:worker` (or cron driving jobs) must run |
@@ -32,45 +32,20 @@ occ app:install integration_openai
 occ app:enable integration_openai
 ```
 
-If the store rejects the app as incompatible with your server major (common on master), install from source the
-same way as Assistant in [ai-stack.md](ai-stack.md): clone into `apps-extra`, bump
-`<nextcloud max-version="…"/>`, install PHP deps as `www-data`, then enable:
+On **Nextcloud master / a version ahead of the app's `max-version`**, enable fails with "not compatible"
+even though the app would run. Do not edit `info.xml` — enable with `--force`:
 
 ```bash
-git clone --depth 1 --branch <tag> https://github.com/nextcloud/integration_openai.git \
-  workspace/server/apps-extra/integration_openai
-# bump max-version in appinfo/info.xml to the server major
-sudo chown -R 33:33 workspace/server/apps-extra/integration_openai
-docker compose exec -u www-data nextcloud bash -lc \
-  'cd /var/www/html/apps-extra/integration_openai && composer install --no-dev -n --no-scripts'
-# Always build frontend assets (settings UI); Node must satisfy package.json engines
-# (nextcloud-docker-dev: nvm under /root/.nvm in the PHP container):
-docker compose exec nextcloud bash -lc \
-  '. /root/.nvm/nvm.sh 2>/dev/null; cd /var/www/html/apps-extra/integration_openai && npm ci && npm run build && chown -R www-data:www-data .'
-occ app:enable integration_openai
+occ app:enable integration_openai --force
 ```
 
-Use `--no-scripts` when the package's `php-scoper` post-install hook fails in the container (verified on
-source installs). Do **not** skip `npm ci && npm run build` on source installs: Task Processing providers
-register from PHP alone, but the admin settings UI (URL, API key, models, modality toggles) needs the Vite
-bundles under `js/` / `css/`.
-
-### Store copy shadows `apps-extra`
-
-If you previously ran `occ app:install integration_openai` and it landed under `apps-writable` with a
-`max-version` that excludes the current server major, `occ app:enable` keeps failing with “not compatible”
-even after you put a patched tree in `apps-extra`. Writable apps win over `apps-extra`.
-
-```bash
-occ app:getpath integration_openai
-# if this prints …/apps-writable/integration_openai, remove the store copy first:
-occ app:remove integration_openai
-occ app:getpath integration_openai   # should now be …/apps-extra/integration_openai
-occ app:enable integration_openai
-```
-
-Confirm with `occ app:list` that the enabled version matches the `apps-extra` `info.xml` (for example
-`4.2.0`), not the abandoned store build.
+Only if the store has no package (or you need a git checkout), clone into `apps-extra` the same way as
+Assistant in [ai-stack.md](ai-stack.md): composer as `www-data`, frontend via a host-uid `node:24`
+container, then `occ app:enable integration_openai --force`. Use `composer install --no-dev -n --no-scripts`
+when the package's `php-scoper` post-install hook fails in the container. Do **not** skip
+`npm ci && npm run build` on source installs: Task Processing providers register from PHP alone, but the
+admin settings UI needs the Vite bundles under `js/` / `css/`. `package.json` engines prefer Node 24;
+Node 26 usually only warns — switch image major only if the engines check fails the build.
 
 ## Configure (admin)
 
@@ -161,10 +136,13 @@ occ config:app:set integration_openai tts_provider_enabled --value="0"
 # If the list clearly has e.g. whisper-1 and tts-1, set those defaults and flip the matching flags to 1
 ```
 
-After changing provider enable flags or defaults, reload PHP apps so registration picks them up:
+Provider registration runs on every request; flag and default changes take effect immediately. The only lag
+is the **60 second** task-type cache documented in
+[ai-stack.md](ai-stack.md#verify-the-acceptance-recipe). Re-query after it expires, or flush Redis on
+nextcloud-docker-dev instead of waiting:
 
 ```bash
-occ app:disable integration_openai && occ app:enable integration_openai
+docker exec -it master-redis-1 redis-cli flushall
 ```
 
 ### Personal keys
@@ -225,10 +203,10 @@ Confirm enabled modalities match what `/v1/models` actually offers (step 2 above
 | `400` mentioning `max_completion_tokens` | Leave `use_max_completion_tokens_param=0` for non-OpenAI APIs |
 | Empty model list in admin UI | Admin viewing with a stale personal key; or egress blocked; re-run `/v1/models` from the container |
 | Enabled t2i/stt/tts but tasks fail | Modality enabled without a matching model on the endpoint; disable the flag or pick a listed default |
-| Blank OpenAI / AI settings page after source install | Missing Vite build — run `npm ci && npm run build` in the app directory |
-| Task types missing after enable | `llm_provider_enabled=0`; or app not re-enabled after config change |
+| Blank OpenAI / AI settings page after source install | Missing Vite build — run `npm ci && npm run build` via a host-uid `node:24` container (see [ai-stack.md](ai-stack.md)) |
+| Task types missing after enable / config change | `llm_provider_enabled=0`; or wait up to 60 s for the task-type cache TTL (or `docker exec -it master-redis-1 redis-cli flushall` on docker-dev) and re-query |
 | Tasks stay `scheduled` | Background jobs / worker not running (integration providers are synchronous) |
-| Enable says “not compatible” but `apps-extra` `info.xml` looks fine | An older store install under `apps-writable` is shadowing; `occ app:remove` then enable the `apps-extra` copy (see above) |
+| Enable says “not compatible” | Use `occ app:enable integration_openai --force` (do not edit store `info.xml`) |
 
 ## Related
 

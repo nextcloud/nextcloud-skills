@@ -56,13 +56,14 @@ Three layers, and almost every support question is really about the boundary bet
 - Compute device is a property of the **daemon**, not the app: register the daemon with
   `--compute_device cuda|rocm` before deploying GPU providers.
 - On the Nextcloud 35+ dev line, several AI ExApps have no release in the app store feed yet, so they install
-  from a manifest instead of the store. Manifest `max-version` and PHP apps like Assistant may also lag the
-  server major — bump a local copy (see ai-stack.md).
+  from a manifest instead of the store. Manifest `max-version` may lag the server major — bump a **local**
+  copy. PHP apps (Assistant, `integration_openai`) use `occ app:enable <app> --force` instead of editing
+  `info.xml` (see ai-stack.md).
 - Stock llm2 init downloads multiple multi-GB models. On Cloud Agents and CPU hosts without that budget, use
   [openai-integration.md](references/openai-integration.md) instead of registering llm2.
 - `--info-xml` paths must be readable by the Nextcloud PHP process (inside the container on docker-dev).
 - PHP apps from source (Assistant, `integration_openai`, …) need `npm ci && npm run build` after
-  `composer install`; git does not ship the Vite `js/` / `css/` output.
+  `composer install` (host-uid `node:24` container; git does not ship Vite `js/` / `css/`).
 
 ## Files
 

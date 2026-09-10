@@ -52,33 +52,41 @@ occ app_api:daemon:register ... --compute_device cuda   # or rocm, default cpu
 Full daemon setup: [operations.md Quickstart](../../exapp-operations/references/operations.md#2-quickstart-zero-to-a-working-exapp).
 Changing the compute device later means unregistering the daemon and reinstalling the apps on it.
 
-**2. The frontend.** Prefer the store when it matches your server:
+**2. The frontend.** Prefer the store:
 
 ```bash
 occ app:install assistant
 occ app:enable assistant
 ```
 
-On **Nextcloud master / a version ahead of the app's `max-version`**, `app:install` fails with
-"not compatible with this version of the server" even though the app would run. Install from source into
-`apps-extra` (nextcloud-docker-dev layout) and bump the dependency range:
+On **Nextcloud master / a version ahead of the app's `max-version`**, enable fails with "not compatible
+with this version of the server" even though the app would run. Skip editing `info.xml` — enable with
+`--force` (PHP apps only; it skips the version check):
+
+```bash
+occ app:enable assistant --force
+```
+
+Only if the store has no package (or you need a git checkout), clone into `apps-extra` (nextcloud-docker-dev
+layout). Do **not** bump `max-version`; enable with `--force` as above. Frontend assets are not shipped in
+git — build them as the host user with a Node container so the tree stays editable (no `chown` to
+www-data):
 
 ```bash
 git clone --depth 1 https://github.com/nextcloud/assistant.git workspace/server/apps-extra/assistant
-# bump max-version in appinfo/info.xml to match the server major (e.g. 36)
-sudo chown -R 33:33 workspace/server/apps-extra/assistant   # www-data in the PHP container
 docker compose exec -u www-data nextcloud \
   bash -lc 'cd /var/www/html/apps-extra/assistant && composer install --no-dev -n'
-# Frontend assets are not shipped in git — always build them (Node must satisfy package.json engines;
-# on nextcloud-docker-dev the PHP container usually has nvm under /root/.nvm):
-docker compose exec nextcloud bash -lc \
-  '. /root/.nvm/nvm.sh 2>/dev/null; cd /var/www/html/apps-extra/assistant && npm ci && npm run build && chown -R www-data:www-data .'
-occ app:enable assistant
+# package.json engines prefer Node 24; Node 26 usually only warns (no engine-strict). Use a matching
+# major only if npm ci / build fails on the engines check:
+docker run --rm -u "$(id -u):$(id -g)" \
+  -v "$PWD/workspace/server/apps-extra/assistant:/app" -w /app \
+  node:24 bash -lc 'npm ci && npm run build'
+occ app:enable assistant --force
 ```
 
-Run `npm ci && npm run build` for **every** PHP AI app installed from source (Assistant,
-`integration_openai`, …). Without the Vite output under `js/` / `css/`, the admin and user UI is blank even
-when providers work.
+Run the same Node-container `npm ci && npm run build` for **every** PHP AI app installed from source
+(Assistant, `integration_openai`, …). Without the Vite output under `js/` / `css/`, the admin and user UI
+is blank even when providers work.
 
 Assistant only draws the UI; on its own it can do nothing.
 
@@ -101,16 +109,16 @@ A `0` means the store cannot serve it (this is the normal situation on the Nextc
 Install from a manifest instead, using the app's own `appinfo/info.xml` from its repository.
 
 If the manifest's `<nextcloud max-version="…"/>` is behind your server major, bump it in a **local copy** of
-the XML before registering (same version-skew pattern as Assistant). Do not push that bump unless you own the
-upstream release.
+the XML before registering. ExApp manifests still need that edit — unlike PHP apps, there is no
+`app:enable --force` equivalent. Do not push that bump unless you own the upstream release.
 
 `--info-xml` must be a path the **Nextcloud PHP process** can read. On nextcloud-docker-dev that means a path
 *inside* the Nextcloud container, not only on the host:
 
 ```bash
 # host → container, then register with the in-container path
-docker cp /path/on/host/info.xml master-nextcloud-1:/tmp/llm2-info.xml
-occ app_api:app:register llm2 <daemon> --info-xml /tmp/llm2-info.xml --wait-finish
+docker cp /path/on/host/info.xml master-nextcloud-1:/tmp/<appid>-info.xml
+occ app_api:app:register <appid> <daemon> --info-xml /tmp/<appid>-info.xml --wait-finish
 ```
 
 A host-only absolute path fails even when the file exists on the machine running `occ.sh`.
