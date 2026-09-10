@@ -164,11 +164,42 @@ the OpenAI integration provider as preferred for the task type under test.
 
 ## Verify
 
-Same acceptance recipe as [ai-stack.md](ai-stack.md#verify-the-acceptance-recipe):
+Do this **after config**, before or together with the acceptance recipe. Setting `api_key` and curling
+`/v1/models` from the shell is not enough: Task Processing and the Assistant Model control read the app's
+**cached** model list. Force discovery into that cache, then assert the optional-model UI contract.
 
-1. `GET /ocs/v2.php/taskprocessing/tasktypes` includes `core:text2text` (wait up to 60 s for cache TTL).
+### 1. Force model discovery (app cache, not only shell curl)
+
+`curl` to the vendor `/v1/models` proves egress; it does **not** fill `integration_openai`'s model cache.
+The app refreshes via `OpenAiAPIService::getModels(null, true)` (second arg = force network + rewrite
+cache). That is what the daily `OCA\OpenAi\Cron\RefreshModels` job and the admin models endpoint call.
+
+```bash
+NC=<nextcloud-url>   # e.g. http://nextcloud.local
+
+# Admin GET — OpenAiAPIController::getModels → getModels(null, true)
+curl -s -u <admin>:<pass> "$NC/index.php/apps/integration_openai/models" \
+  | jq -e '(.data | length) > 0'
+```
+
+Expect a non-empty `data` array of model objects. Then flush the Task Processing task-type cache (or wait up
+to 60 s) so the next OCS read sees fresh optional shapes:
+
+```bash
+docker exec -it master-redis-1 redis-cli flushall   # nextcloud-docker-dev; or wait 60 s
+```
+
+### 2. Acceptance (task completes)
+
+Same recipe as [ai-stack.md](ai-stack.md#verify-the-acceptance-recipe):
+
+1. `GET /ocs/v2.php/taskprocessing/tasktypes` includes `core:text2text` (already required by the jq check).
 2. Schedule a `core:text2text` task with a short prompt.
 3. Drive background jobs / `occ taskprocessing:worker --once` until the task is `STATUS_SUCCESSFUL`.
+
+### 3. Optional UI check
+
+If a browser is available ([dev-environment.md Stage 8](../../nextcloud-dev-setup/references/dev-environment.md#stage-8-optional-give-the-agent-a-browser)): open **Assistant → Generate text**, open the advanced **Model** field, and confirm it lists real model ids (not a blank or invalid select). The jq check above is the automated stand-in when you have no browser.
 
 Quick config sanity (does not print the secret):
 
@@ -186,7 +217,7 @@ occ config:app:get integration_openai tts_provider_enabled
 occ config:app:get integration_openai api_key   # should be non-empty; do not log it
 ```
 
-Confirm enabled modalities match what `/v1/models` actually offers (step 2 above).
+Confirm enabled modalities match what `/v1/models` actually offers (configure step 2 above).
 
 ## Endpoint cheat sheet
 
@@ -201,7 +232,8 @@ Confirm enabled modalities match what `/v1/models` actually offers (step 2 above
 |---|---|
 | `401` on `/v1/models` | Wrong or expired key; personal key overriding admin; URL missing `/v1` |
 | `400` mentioning `max_completion_tokens` | Leave `use_max_completion_tokens_param=0` for non-OpenAI APIs |
-| Empty model list in admin UI | Admin viewing with a stale personal key; or egress blocked; re-run `/v1/models` from the container |
+| Empty model list in admin UI | Admin viewing with a stale personal key; or egress blocked; force app discovery with `GET …/apps/integration_openai/models` (not only shell curl to `/v1/models`) |
+| Assistant Model dropdown empty/broken | Models cache empty / refresh failed / default not in enum; force refresh + flush Redis; confirm with the jq check in [Verify](#verify) |
 | Enabled t2i/stt/tts but tasks fail | Modality enabled without a matching model on the endpoint; disable the flag or pick a listed default |
 | Blank OpenAI / AI settings page after source install | Missing Vite build — run `npm ci && npm run build` via a host-uid `node:24` container (see [ai-stack.md](ai-stack.md)) |
 | Task types missing after enable / config change | `llm_provider_enabled=0`; or wait up to 60 s for the task-type cache TTL (or `docker exec -it master-redis-1 redis-cli flushall` on docker-dev) and re-query |
