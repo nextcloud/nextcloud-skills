@@ -56,15 +56,15 @@ Changing the compute device later means unregistering the daemon and reinstallin
 
 ```bash
 occ app:install assistant
-occ app:enable assistant
 ```
 
-On **Nextcloud master / a version ahead of the app's `max-version`**, enable fails with "not compatible
-with this version of the server" even though the app would run. Skip editing `info.xml` — enable with
-`--force` (PHP apps only; it skips the version check):
+On **Nextcloud master / a version ahead of the app's `max-version`**, `app:install` prints "not compatible
+with this version of the server" even though the app would run: the package is downloaded, only the enable
+step refuses. Skip editing `info.xml`; `--force` skips the version check (PHP apps only) and is recorded in
+the system config `app_install_overwrite` until the next major upgrade:
 
 ```bash
-occ app:enable assistant --force
+occ app:install assistant --force      # or, after the error above: occ app:enable assistant --force
 ```
 
 Only if the store has no package (or you need a git checkout), clone into `apps-extra` (nextcloud-docker-dev
@@ -74,8 +74,9 @@ www-data):
 
 ```bash
 git clone --depth 1 https://github.com/nextcloud/assistant.git workspace/server/apps-extra/assistant
-docker compose exec -u www-data nextcloud \
-  bash -lc 'cd /var/www/html/apps-extra/assistant && composer install --no-dev -n'
+# as the host uid: www-data cannot create vendor/ in a host-owned checkout
+docker compose exec --user "$(id -u):$(id -g)" -e COMPOSER_HOME=/tmp/composer \
+  -w /var/www/html/apps-extra/assistant nextcloud composer install --no-dev -n
 # package.json engines prefer Node 24; Node 26 usually only warns (no engine-strict). Use a matching
 # major only if npm ci / build fails on the engines check:
 docker run --rm -u "$(id -u):$(id -g)" \

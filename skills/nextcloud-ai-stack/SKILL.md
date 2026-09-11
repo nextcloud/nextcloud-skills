@@ -57,7 +57,7 @@ Three layers, and almost every support question is really about the boundary bet
   `--compute_device cuda|rocm` before deploying GPU providers.
 - On the Nextcloud 35+ dev line, several AI ExApps have no release in the app store feed yet, so they install
   from a manifest instead of the store. Manifest `max-version` may lag the server major — bump a **local**
-  copy. PHP apps (Assistant, `integration_openai`) use `occ app:enable <app> --force` instead of editing
+  copy. PHP apps (Assistant, `integration_openai`) use `occ app:install <app> --force` instead of editing
   `info.xml` (see ai-stack.md).
 - Stock llm2 init downloads multiple multi-GB models. On Cloud Agents and CPU hosts without that budget, use
   [openai-integration.md](references/openai-integration.md) instead of registering llm2.
