@@ -169,7 +169,7 @@ def proxy_survives_harp_absence():
     targets = [line.split(None, 1)[1].rstrip(";") for line in snippet.splitlines()
                if line.strip().startswith("proxy_pass")]
     assert targets, "no proxy_pass in the vhost snippet"
-    literal = [t for t in targets if not t.startswith("$")]
+    literal = [t for t in targets if "$" not in t]
     assert not literal, (
         f"literal proxy_pass {literal[0]}: nginx refuses to start whenever that host is absent, "
         "taking every instance down; use the set $harp_upstream form from Stage 5")

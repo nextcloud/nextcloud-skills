@@ -180,7 +180,7 @@ than an env value because `docker compose config` prints env values in clear, an
 compose file load the whole `.env` through `env_file`.
 
 ```bash
-(umask 077; tr -dc A-Za-z0-9 </dev/urandom | head -c 32 > data/harp.key)   # any ASCII string works
+(umask 077; LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 32 > data/harp.key)   # any ASCII string works; LC_ALL=C keeps BSD tr (macOS) happy
 echo data/harp.key >> .git/info/exclude
 ```
 
@@ -215,7 +215,10 @@ Notes:
   `appapi-harp` DNS alias on the compose network, which is what every later stage uses. A fixed name only
   invites collisions with older HaRP containers.
 - HaRP exits at start when the key file is missing or empty, so a mistake fails at `up`, not at the first
-  ExApp install. It re-reads the file on every start (HaRP 0.3.1+), which is what makes rotation a restart.
+  ExApp install. It reads the file when the container is created. To change the key, recreate the container
+  (`docker compose up -d --force-recreate appapi-harp`): `up -d` alone does nothing because the compose
+  config did not change, and a plain `restart` keeps the FRP configs HaRP generated with the old key inside
+  the container, so HaRP stops with `frpc exited unexpectedly` and restarts in a loop (HaRP 0.4.5).
 - FRP TLS stays on (the default): HaRP generates its certificates itself and AppAPI installs them into ExApp
   containers at deploy time; nothing to configure.
 - The full `HP_*` reference lives in the HaRP README (Environment Variables section); nothing else needs tuning
@@ -433,8 +436,9 @@ Alternatives exist (`@playwright/mcp` is the other common one); this stage docum
 
 ### Rotating the shared key
 
-Write the new value into `data/harp.key` and `docker compose up -d appapi-harp`; HaRP reads the file on every
-start. From that moment AppAPI still signs with the old key and HaRP answers 401 to it, `daemon:unregister`
+Write the new value into `data/harp.key` and recreate HaRP with `docker compose up -d --force-recreate
+appapi-harp` (not `restart`, see the Stage 4 note). From that moment AppAPI still signs with the old key and
+HaRP answers 401 to it, `daemon:unregister`
 refuses while the daemon holds ExApps ("contains N ExApps, please remove them first") and has no `--force`,
 and the ExApps cannot be removed the normal way because that goes through HaRP. The order that works:
 
@@ -448,8 +452,10 @@ and the ExApps cannot be removed the normal way because that goes through HaRP. 
     --set-default
 ```
 
-Then redeploy the ExApps (Stage 7's `make register-docker` for the reference app); AppAPI removes the orphaned
-containers itself. Daemon options added later (`app_api:daemon:registry:add`, for example) must be added again.
+Then redeploy the ExApps (Stage 7's `make register-docker` for the reference app); AppAPI replaces the orphaned
+containers itself. Registry mappings live in the daemon config and go with it: Stage 7's target re-adds the
+reference app's mapping by itself, anything you added by hand with `app_api:daemon:registry:add` must be added
+again.
 
 ## Troubleshooting (symptom first)
 
@@ -465,6 +471,7 @@ containers itself. Daemon options added later (`app_api:daemon:registry:add`, fo
 | `/exapps/<app>/<declared-route>` returns 404 | Route not declared in the app's manifest, or the app sits on a non-HaRP daemon (manual apps are served at `/index.php/apps/app_api/proxy/<appid>/...`) |
 | `/exapps/` returns 502 | HaRP container down, or a browser request to an infrastructure route (`/heartbeat`, `/init`, `/enabled`), which is blocked by design |
 | Every URL refuses the connection, `status.php` too, while Nextcloud logs look fine | nginx did not start: the `/exapps/` snippet names `appapi-harp` in a literal `proxy_pass` and the container is absent (`docker compose logs proxy` shows `[emerg] host not found in upstream`). Use the Stage 5 `set $harp_upstream` form; until then, start HaRP and the proxy recovers within seconds |
+| HaRP restarts in a loop after a key change; its log ends with `frpc exited unexpectedly` | A plain `restart` kept the FRP configs generated with the old key. `docker compose up -d --force-recreate appapi-harp` |
 | Ports 80/443 busy on the host | Another web server; stop it or change the bind/port settings in `.env` |
 | An ExApp sends a notification, AppAPI answers 200, nothing ever appears | The `notifications` app is not enabled: git checkouts do not include it and the app store has no build for a development version; do Stage 3 |
 
