@@ -10,7 +10,8 @@ A detailed runbook, part of the [nextcloud-ai-stack](../SKILL.md) skill. Local E
 OpenAI-compatible HTTP API (LocalAI, Ollama, and similar).
 
 Last verified against: Nextcloud master (36), `integration_openai` 5.0.0 from the app store, with a
-server-wide API key against **OpenAI** (empty `url`, OpenAI defaults), on 2026-08-26.
+server-wide API key against **OpenAI** (empty `url`, OpenAI defaults), on 2026-08-26; install, refresh and
+acceptance commands re-run on 2026-09-11 against an OpenAI-compatible endpoint.
 
 ## What you need
 
@@ -29,23 +30,31 @@ You do **not** need AppAPI, HaRP, or a deploy daemon for this path.
 
 ```bash
 occ app:install integration_openai
-occ app:enable integration_openai
 ```
 
-On **Nextcloud master / a version ahead of the app's `max-version`**, enable fails with "not compatible"
-even though the app would run. Do not edit `info.xml` — enable with `--force`:
+On **Nextcloud master / a version ahead of the app's `max-version`**, `app:install` itself prints "not
+compatible with this version of the server" even though the app would run: the package is downloaded, only
+the enable step refuses. Do not edit `info.xml`; `--force` on the install does both steps, and the same flag
+on `app:enable` recovers an install that already printed the error:
 
 ```bash
-occ app:enable integration_openai --force
+occ app:install integration_openai --force     # or, after the error: occ app:enable integration_openai --force
 ```
 
+The flag is recorded in the system config `app_install_overwrite`, which the server keeps until the next
+major upgrade.
+
 Only if the store has no package (or you need a git checkout), clone into `apps-extra` the same way as
-Assistant in [ai-stack.md](ai-stack.md): composer as `www-data`, frontend via a host-uid `node:24`
-container, then `occ app:enable integration_openai --force`. Use `composer install --no-dev -n --no-scripts`
-when the package's `php-scoper` post-install hook fails in the container. Do **not** skip
+Assistant in [ai-stack.md](ai-stack.md): composer and the frontend build both as the **host uid** (the
+`docker compose exec --user "$(id -u):$(id -g)" -e COMPOSER_HOME=/tmp/composer` form and the `node:24`
+container; `www-data` cannot create `vendor/` in a host-owned checkout), then
+`occ app:enable integration_openai --force`. The package's `php-scoper` post-install hook fails in the
+container (it looks for a getid3 module file that is not there); `composer install --no-dev -n --no-scripts`
+gets you a working install for text tasks, but without the hook nothing exists under `OCA\OpenAi\Vendor`,
+so the image, text-to-speech, audio-translate and multimodal-chat providers fail on use. Do **not** skip
 `npm ci && npm run build` on source installs: Task Processing providers register from PHP alone, but the
 admin settings UI needs the Vite bundles under `js/` / `css/`. `package.json` engines prefer Node 24;
-Node 26 usually only warns — switch image major only if the engines check fails the build.
+Node 26 usually only warns; switch image major only if the engines check fails the build.
 
 ## Configure (admin)
 
@@ -142,7 +151,7 @@ is the **60 second** task-type cache documented in
 nextcloud-docker-dev instead of waiting:
 
 ```bash
-docker exec -it master-redis-1 redis-cli flushall
+docker exec master-redis-1 redis-cli flushall
 ```
 
 ### Personal keys
@@ -173,33 +182,34 @@ Do this **after config**, before or together with the acceptance recipe. Setting
 `curl` to the vendor `/v1/models` proves egress; it does **not** fill `integration_openai`'s model cache.
 The app refreshes via `OpenAiAPIService::getModels(null, true)` (second arg = force network + rewrite
 cache). That is what the daily `OCA\OpenAi\Cron\RefreshModels` job and the admin models endpoint call.
+Run the job now instead of waiting for it; the admin `/models` route is not usable from a shell (it has no
+`NoCSRFRequired`, so a basic-auth `GET` answers `412 CSRF check failed`):
 
 ```bash
-NC=<nextcloud-url>   # e.g. http://nextcloud.local
-
-# Admin GET — OpenAiAPIController::getModels → getModels(null, true)
-curl -s -u <admin>:<pass> "$NC/index.php/apps/integration_openai/models" \
-  | jq -e '(.data | length) > 0'
+occ background-job:list --class 'OCA\OpenAi\Cron\RefreshModels'   # take the id from the table
+occ background-job:execute --force-execute <id>
+occ config:app:get integration_openai models   # the stored list the providers read
 ```
 
-Expect a non-empty `data` array of model objects. Then flush the Task Processing task-type cache (or wait up
-to 60 s) so the next OCS read sees fresh optional shapes:
+Expect `{"object":"list","data":[{"id":...},...]}` with a non-empty `data` array. Then flush the Task
+Processing task-type cache (or wait up to 60 s) so the next OCS read sees fresh optional shapes:
 
 ```bash
-docker exec -it master-redis-1 redis-cli flushall   # nextcloud-docker-dev; or wait 60 s
+docker exec master-redis-1 redis-cli flushall   # nextcloud-docker-dev; or wait 60 s. No -it: it fails without a TTY
 ```
 
 ### 2. Acceptance (task completes)
 
 Same recipe as [ai-stack.md](ai-stack.md#verify-the-acceptance-recipe):
 
-1. `GET /ocs/v2.php/taskprocessing/tasktypes` includes `core:text2text` (already required by the jq check).
+1. `GET /ocs/v2.php/taskprocessing/tasktypes` includes `core:text2text` (the type is listed even while the
+   model list is empty; only its `model` enum depends on the refresh above).
 2. Schedule a `core:text2text` task with a short prompt.
 3. Drive background jobs / `occ taskprocessing:worker --once` until the task is `STATUS_SUCCESSFUL`.
 
 ### 3. Optional UI check
 
-If a browser is available ([dev-environment.md Stage 8](../../nextcloud-dev-setup/references/dev-environment.md#stage-8-optional-give-the-agent-a-browser)): open **Assistant → Generate text**, open the advanced **Model** field, and confirm it lists real model ids (not a blank or invalid select). The jq check above is the automated stand-in when you have no browser.
+If a browser is available ([dev-environment.md Stage 8](../../nextcloud-dev-setup/references/dev-environment.md#stage-8-optional-give-the-agent-a-browser)): open **Assistant → Generate text**, open the advanced **Model** field, and confirm it lists real model ids (not a blank or invalid select). The `config:app:get integration_openai models` check above is the automated stand-in when you have no browser.
 
 Quick config sanity (does not print the secret):
 
@@ -232,11 +242,11 @@ Confirm enabled modalities match what `/v1/models` actually offers (configure st
 |---|---|
 | `401` on `/v1/models` | Wrong or expired key; personal key overriding admin; URL missing `/v1` |
 | `400` mentioning `max_completion_tokens` | Leave `use_max_completion_tokens_param=0` for non-OpenAI APIs |
-| Empty model list in admin UI | Admin viewing with a stale personal key; or egress blocked; force app discovery with `GET …/apps/integration_openai/models` (not only shell curl to `/v1/models`) |
-| Assistant Model dropdown empty/broken | Models cache empty / refresh failed / default not in enum; force refresh + flush Redis; confirm with the jq check in [Verify](#verify) |
+| Empty model list in admin UI | Admin viewing with a stale personal key; or egress blocked; run the `RefreshModels` job ([Verify](#verify) step 1); shell curl to `/v1/models` does not fill the app's list |
+| Assistant Model dropdown empty/broken | Models cache empty / refresh failed / default not in enum; run the `RefreshModels` job + flush Redis; confirm with `config:app:get integration_openai models` ([Verify](#verify)) |
 | Enabled t2i/stt/tts but tasks fail | Modality enabled without a matching model on the endpoint; disable the flag or pick a listed default |
 | Blank OpenAI / AI settings page after source install | Missing Vite build — run `npm ci && npm run build` via a host-uid `node:24` container (see [ai-stack.md](ai-stack.md)) |
-| Task types missing after enable / config change | `llm_provider_enabled=0`; or wait up to 60 s for the task-type cache TTL (or `docker exec -it master-redis-1 redis-cli flushall` on docker-dev) and re-query |
+| Task types missing after enable / config change | `llm_provider_enabled=0`; or wait up to 60 s for the task-type cache TTL (or `docker exec master-redis-1 redis-cli flushall` on docker-dev) and re-query |
 | Tasks stay `scheduled` | Background jobs / worker not running (integration providers are synchronous) |
 | Enable says “not compatible” | Use `occ app:enable integration_openai --force` (do not edit store `info.xml`) |
 
