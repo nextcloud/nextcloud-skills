@@ -13,7 +13,8 @@ which feature is provided by which app, the authoritative matrix is the
 this runbook covers the part the manual does not: the order to do things in, the commands that prove each
 step, and the operational facts that decide your hardware.
 
-Last verified against: Nextcloud master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.3, llm2 2.8.0 and integration_openai, on 2026-08-11.
+Last verified against: Nextcloud master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.3, llm2 2.8.0 and integration_openai, on 2026-08-11;
+the PHP-app install and build commands re-run on 2026-09-14 against master (36).
 
 Throughout, `occ` means the Nextcloud server console; on a Docker install run it as
 `docker exec -u www-data <nextcloud-container> php occ <command>`

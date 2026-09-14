@@ -18,7 +18,7 @@ acceptance commands re-run on 2026-09-11 against an OpenAI-compatible endpoint.
 | Requirement | Notes |
 |---|---|
 | Nextcloud + admin/`occ` | Same instance the Assistant / Task Processing UI uses |
-| `integration_openai` app | Store install; on master use `occ app:enable … --force` when `max-version` lags (see below) |
+| `integration_openai` app | Store install; on master `occ app:install … --force` when `max-version` lags (see below) |
 | API base URL | Empty for OpenAI defaults, or the **OpenAI-compatible** root including `/v1` when the vendor uses that layout |
 | API key (or basic auth) | Admin-wide key via `occ config:app:set … --sensitive`, or per-user in personal settings |
 | Working cron / background jobs | Integration providers are **synchronous**; `occ taskprocessing:worker` (or cron driving jobs) must run |
@@ -248,7 +248,7 @@ Confirm enabled modalities match what `/v1/models` actually offers (configure st
 | Blank OpenAI / AI settings page after source install | Missing Vite build — run `npm ci && npm run build` via a host-uid `node:24` container (see [ai-stack.md](ai-stack.md)) |
 | Task types missing after enable / config change | `llm_provider_enabled=0`; or wait up to 60 s for the task-type cache TTL (or `docker exec master-redis-1 redis-cli flushall` on docker-dev) and re-query |
 | Tasks stay `scheduled` | Background jobs / worker not running (integration providers are synchronous) |
-| Enable says “not compatible” | Use `occ app:enable integration_openai --force` (do not edit store `info.xml`) |
+| `app:install` or `app:enable` says "not compatible" | `occ app:install integration_openai --force` on a fresh install; `occ app:enable integration_openai --force` when the files are already there (do not edit store `info.xml`) |
 
 ## Related
 
