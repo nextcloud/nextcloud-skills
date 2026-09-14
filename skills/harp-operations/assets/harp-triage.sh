@@ -61,6 +61,12 @@ docker inspect "$HARP_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{e
 section "Probes"
 key=${HP_SHARED_KEY:-$(docker inspect "$HARP_CONTAINER" \
     --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^HP_SHARED_KEY=//p')}
+if [ -z "$key" ]; then
+    # HP_SHARED_KEY_FILE setups (the dev environment's default): read the mounted file
+    key_file=$(docker inspect "$HARP_CONTAINER" \
+        --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^HP_SHARED_KEY_FILE=//p')
+    [ -n "$key_file" ] && key=$(docker exec "$HARP_CONTAINER" cat "$key_file" 2>/dev/null)
+fi
 
 if [ -n "$key" ]; then
     printf 'info (expect version + "docker": true): '
@@ -68,7 +74,7 @@ if [ -n "$key" ]; then
         -H "harp-shared-key: $key" http://127.0.0.1:8780/exapps/app_api/info || echo "(request failed)"
     printf '\n'
 else
-    echo 'info: skipped (no HP_SHARED_KEY available)'
+    echo 'info: skipped (neither HP_SHARED_KEY nor HP_SHARED_KEY_FILE available)'
 fi
 
 printf 'unsigned /exapps/app_api/info (expect 401): '
