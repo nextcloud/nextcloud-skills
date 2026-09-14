@@ -436,14 +436,14 @@ Alternatives exist (`@playwright/mcp` is the other common one); this stage docum
 
 ### Rotating the shared key
 
-Write the new value into `data/harp.key` and recreate HaRP with `docker compose up -d --force-recreate
-appapi-harp` (not `restart`, see the Stage 4 note). From that moment AppAPI still signs with the old key and
-HaRP answers 401 to it, `daemon:unregister`
-refuses while the daemon holds ExApps ("contains N ExApps, please remove them first") and has no `--force`,
-and the ExApps cannot be removed the normal way because that goes through HaRP. The order that works:
+Unregister the ExApps first, while the old key still works, so HaRP removes their containers cleanly. Then
+write the new value and recreate HaRP (`--force-recreate`, not `restart`, see the Stage 4 note). Then replace
+the daemon: `daemon:unregister` refuses while the daemon holds ExApps and has no `--force`.
 
 ```bash
-./scripts/occ.sh nextcloud -- app_api:app:unregister <appid> --force --silent   # per ExApp; drops the row without asking HaRP
+./scripts/occ.sh nextcloud -- app_api:app:unregister <appid>          # per ExApp, before the key changes
+(umask 077; LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 32 > data/harp.key)
+docker compose up -d --force-recreate appapi-harp
 ./scripts/occ.sh nextcloud -- app_api:daemon:unregister local-harp
 ./scripts/occ.sh nextcloud -- app_api:daemon:register \
     local-harp "HaRP (local)" docker-install http appapi-harp:8780 http://nextcloud.local \
@@ -452,10 +452,14 @@ and the ExApps cannot be removed the normal way because that goes through HaRP. 
     --set-default
 ```
 
-Then redeploy the ExApps (Stage 7's `make register-docker` for the reference app); AppAPI replaces the orphaned
-containers itself. Registry mappings live in the daemon config and go with it: Stage 7's target re-adds the
-reference app's mapping by itself, anything you added by hand with `app_api:daemon:registry:add` must be added
-again.
+Then redeploy the ExApps (Stage 7's `make register-docker` for the reference app). Registry mappings live in
+the daemon config and go with it: Stage 7's target re-adds the reference app's mapping by itself, anything you
+added by hand with `app_api:daemon:registry:add` must be added again.
+
+If the key already changed (HaRP was recreated first, or the file was lost), AppAPI still signs with the old
+key, HaRP answers 401, and the normal unregister fails. Use `app_api:app:unregister <appid> --force --silent`
+instead: it drops the row without asking HaRP and leaves the container `nc_app_<appid>` running. The redeploy
+replaces that container; to remove it by hand, `docker rm -f nc_app_<appid>`.
 
 ## Troubleshooting (symptom first)
 
