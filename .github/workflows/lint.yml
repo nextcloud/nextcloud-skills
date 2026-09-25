@@ -48,7 +48,7 @@ jobs:
           php-version: "8.3"
           tools: composer
       - name: Install xmllint for the manifest check
-        run: sudo apt-get install -y -q libxml2-utils
+        run: sudo apt-get update -q && sudo apt-get install -y -q libxml2-utils
       - name: rename.sh produces a clean copy
         run: |
           cp -r . /tmp/renamed && cd /tmp/renamed
