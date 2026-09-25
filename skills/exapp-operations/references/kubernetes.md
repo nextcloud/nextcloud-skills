@@ -222,7 +222,17 @@ common cases map directly to HaRP env:
   switch to `nodeport`/`loadbalancer`, use `manual` with `--k8s_upstream_host`, or run HaRP on a node.
 - **ExApp pod cannot resolve your Nextcloud host**: add it via `HP_K8S_HOST_ALIASES`, or ensure
   `<nextcloud-url-reachable-from-exapps>` uses a name cluster DNS can resolve.
-- **Image pull fails in the cluster**: private registry or missing pull secret; configure registry access in
-  the namespace.
+- **Image pull fails in the cluster**: private registry or missing pull secret. HaRP sets no `imagePullSecrets`
+  on ExApp pods, so an authenticated registry needs them on the namespace's `default` ServiceAccount
+  (`kubectl -n <ns> create secret docker-registry <name> ...`, then
+  `kubectl -n <ns> patch serviceaccount default -p '{"imagePullSecrets":[{"name":"<name>"}]}'`).
+- **Mirrored or air-gapped registry**: `app_api:daemon:registry:add <daemon> --registry-from ghcr.io
+  --registry-to <mirror>` applies to Kubernetes daemons since AppAPI nextcloud/app_api#1046; earlier versions
+  stored the mapping but kept pulling from the upstream registry (nextcloud/app_api#1039). Mappings that were
+  already stored take effect on the next ExApp install or update, and the mirror must be reachable from the
+  nodes. A mapping to `local` keeps the image name: with HaRP newer than 0.4.5 (nextcloud/HaRP#122) the pod gets
+  `imagePullPolicy: Never`, so the image has to be present on every node that can schedule it and a missing
+  image fails within seconds; older HaRP keeps `IfNotPresent` and pulls when the node lacks the image. The
+  `-cuda`/`-rocm` image variants are not used on Kubernetes.
 
 For the daemon-register flag reference and general ExApp lifecycle, see [operations.md](operations.md).
