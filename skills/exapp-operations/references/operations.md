@@ -343,7 +343,10 @@ Notes:
   key/value configuration.
 - **Private/mirror Docker registries**: `app_api:daemon:registry:add|remove|list` map registries for a
   daemon so ExApp images can be pulled from somewhere other than the default
-  (`registry:add <daemon> --registry-from <url> --registry-to <url>`).
+  (`registry:add <daemon> --registry-from <url> --registry-to <url>`). Applies to Docker and, since AppAPI
+  nextcloud/app_api#1046, Kubernetes daemons. The target `local` keeps the image name: Docker skips the pull,
+  Kubernetes sets `imagePullPolicy: Never` with HaRP newer than 0.4.5. Values are trimmed and trailing
+  slashes dropped when stored.
 - **Daemons**: `app_api:daemon:list` / `app_api:daemon:unregister` manage daemon configs; re-run
   `app_api:daemon:register ... --set-default` to change the default. Note that `daemon:register` is a no-op if
   a daemon with that `name` already exists (see [Troubleshooting](#10-troubleshooting-symptom-first)).

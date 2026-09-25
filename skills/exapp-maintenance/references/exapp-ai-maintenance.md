@@ -15,7 +15,8 @@ that loop. It is written for an AI agent executing it on a user's behalf; the us
 
 Works against any docker-install HaRP daemon you control, including the development environment from
 [dev-environment.md](../../nextcloud-dev-setup/references/dev-environment.md). Not covered: Kubernetes daemons
-(their images come from an in-cluster registry; the local-image switch below is Docker-only) and manual-install
+(the build-and-tag steps below need the Docker daemon host; a Kubernetes daemon takes a rebuilt image through a
+registry mapping instead, see [kubernetes.md](../../exapp-operations/references/kubernetes.md)) and manual-install
 apps (just edit and restart the process; see
 [exapp-development.md](../../exapp-development/references/exapp-development.md)).
 
@@ -168,7 +169,7 @@ instance through exactly steps 4 to 7.
 | Update succeeded but behavior unchanged | Rebuilt image under a different name/tag than info.xml declares, or the mapping was absent so the registry copy was pulled; check `docker inspect nc_app_<id> --format '{{.Config.Image}}'` and `docker images`. |
 | App store update button "reinstalled" the stock app | Expected: the UI updates from the store. Local builds are occ-driven (`--info-xml`). |
 | App `[enabled]` and heartbeating, but AI tasks are never picked up | The fault can be inside or outside the container. Inside: a silently crashed task loop still registers providers but never claims tasks; look for a startup traceback in `docker logs nc_app_<appid>` (real case: nextcloud/llm2#284). Outside: `occ taskprocessing:task:list` and `taskprocessing:task:get <id>` show tasks stuck scheduled, `occ background-job:list` and cron health show whether the server side runs at all, and the admin AI settings select which provider handles each task type. |
-| App on a Kubernetes daemon | This runbook does not apply; build and push to a registry the cluster can pull, or move the app to a docker daemon for the debugging session. |
+| App on a Kubernetes daemon | This runbook does not apply as written. Push the rebuilt image to a registry the nodes can pull and map the upstream registry to it (`app_api:daemon:registry:add <daemon> --registry-from ghcr.io --registry-to <mirror>`, AppAPI with nextcloud/app_api#1046), or pre-load it on every node and map to `local` (HaRP newer than 0.4.5 then sets `imagePullPolicy: Never`), then `app:update`. Or move the app to a docker daemon for the debugging session. |
 
 ## Related
 
