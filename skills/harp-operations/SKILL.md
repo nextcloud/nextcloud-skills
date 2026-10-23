@@ -34,8 +34,8 @@ This skill is HaRP itself. Registering daemons, installing ExApps and the occ su
 ## Facts that save hours
 
 - Read the status code first, it names the plane: `401` shared key, `403` route access level, `404` unknown
-  route or an app not on this daemon, `502` an infrastructure route or a proxy rule pointing nowhere, `503`
-  the agent under load.
+  route or an app not on this daemon, `405` a method the route's `verb` does not list (HaRP 0.4.8+), `502` an
+  infrastructure route or a proxy rule pointing nowhere, `503` the agent under load.
 - `GET /` on the HTTP frontend answers `404` by design. Never use it as a health probe; use
   `/exapps/app_api/info` with the `harp-shared-key` header.
 - One HaRP serves one Nextcloud. `NC_INSTANCE_URL` is a single value and every request is authorised against
