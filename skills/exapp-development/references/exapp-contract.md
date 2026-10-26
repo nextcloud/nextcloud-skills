@@ -78,7 +78,7 @@ Every HTTP surface the ExApp exposes must be covered by a `<route>`; unmatched r
 
 | Field | Meaning |
 |---|---|
-| `url` | Case-insensitive regex matched against the request path (e.g. `^/api/.*`) |
+| `url` | Regex matched against the request path including its leading `/` (e.g. `^/api/.*`); the PHP proxy ignores case, HaRP does not |
 | `verb` | Comma-separated HTTP methods the route accepts |
 | `access_level` | `PUBLIC` (0) anyone, `USER` (1) any logged-in user, `ADMIN` (2) admins only |
 | `bruteforce_protection` | JSON array of response status codes that count as a bruteforce attempt (e.g. `[401,429]`) |
@@ -86,19 +86,28 @@ Every HTTP surface the ExApp exposes must be covered by a `<route>`; unmatched r
 
 Enforcement happens in two places, depending on the path a request takes:
 
-- **HaRP path** (browser to `/exapps/...`): AppAPI hands HaRP the route table (url + access_level +
+- **HaRP path** (browser to `/exapps/...`): AppAPI hands HaRP the route table (url + verb + access_level +
   bruteforce_protection) via the ExApp metadata endpoint, and HaRP resolves the caller's level per request
   through the user-info endpoint (no/disabled user = PUBLIC, admin = ADMIN, else USER), enforcing the
-  comparison itself. `verb` and `headers_to_exclude` are not part of the HaRP checks. Observed replies: an
-  anonymous request to a `USER` or `ADMIN` route gets `403` (an admin session or basic auth gets through), an
-  undeclared path gets `404`, and the lifecycle endpoints (`/heartbeat`, `/init`, `/enabled`) get `502`.
-- **PHP proxy path** (`/index.php/apps/app_api/proxy/...`): `ExAppProxyController` matches `url` (regex) and
-  `verb`, enforces the access level, strips `headers_to_exclude`, and applies bruteforce throttling on the
-  listed status codes.
+  comparison itself. Since HaRP 0.4.8 the first route whose `url` matches the path and whose `verb` lists the
+  method decides, as in the PHP proxy; `HEAD` is accepted wherever `GET` is listed, and a method that no route
+  of the path lists gets `405` with an `Allow` header. HaRP 0.4.7 and older, and HaRP with an AppAPI that does
+  not send the verbs yet, match by `url` only: the first matching route decides for every method.
+  `headers_to_exclude` is not part of the HaRP checks. Observed replies: an anonymous request to a `USER` or
+  `ADMIN` route gets `403` (an admin session or basic auth gets through), an undeclared path gets `404`, and the
+  lifecycle endpoints (`/heartbeat`, `/init`, `/enabled`) get `502`.
+- **PHP proxy path** (`/index.php/apps/app_api/proxy/...`): `ExAppProxyController` takes the first route whose
+  `url` (regex) matches and whose `verb` lists the method (`HEAD` also where `GET` is listed, since
+  nextcloud/app_api#1144), enforces the access level, strips `headers_to_exclude`, and applies bruteforce
+  throttling on the listed status codes. A request no route lets through gets `404`. Only `GET`, `HEAD`, `POST`,
+  `PUT` and `DELETE` reach the proxy at all: Nextcloud answers other methods, `PATCH` and `OPTIONS` included,
+  with `405`.
 
-Authoring notes: an empty element (`<headers_to_exclude></headers_to_exclude>`) is fine and means "none", but
-nested sub-elements (`<bruteforce_protection><status>401</status></bruteforce_protection>`) are rejected; use
-the JSON-in-text form shown above.
+Authoring notes: list every method a route serves in its `verb` (`GET,POST`), and give methods that need
+different access levels different URLs, as older HaRP versions decide by URL only. An empty element
+(`<headers_to_exclude></headers_to_exclude>`) is fine and means "none", but nested sub-elements
+(`<bruteforce_protection><status>401</status></bruteforce_protection>`) are rejected; use the JSON-in-text form
+shown above.
 
 ## Environment variables: a declared allow-list
 

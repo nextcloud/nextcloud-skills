@@ -142,6 +142,7 @@ cause.
 | `401` | Shared key missing or wrong on a control route, or an unsigned request to `/exapps/app_api/...` |
 | `403` | The caller's level is below the route's `access_level` (anonymous on a USER or ADMIN route) |
 | `404` | Path not declared by the ExApp, or the app is not routable here (`<NOSRV>`), or `GET /` |
+| `405` | No route of that path lists the method in its `verb` (HaRP 0.4.8+); the `Allow` header names the listed ones |
 | `502` | An infrastructure route (`/heartbeat`, `/init`, `/enabled`) requested from outside, which is blocked by design, or a reverse-proxy rule pointing at nothing |
 | `503` | No healthy backend: the agent is stalled or overloaded |
 
@@ -150,8 +151,10 @@ cause.
 - Tags, from HaRP's publish workflow: `:release` on every GitHub release, `:vX.Y.Z` alongside it, `:latest`
   and `:main` on every push to `main`. Production wants `:release` or a pinned `:vX.Y.Z`; `:latest` is a
   development build.
-- AppAPI enforces a floor of `0.3.0` (`Application::MINIMUM_HARP_VERSION`, same in NC33, NC34 and NC35) and
-  reports it through the `HarpVersionCheck` setup check.
+- AppAPI enforces a floor (`Application::MINIMUM_HARP_VERSION`) and reports it through the `HarpVersionCheck`
+  setup check: `0.4.8` with nextcloud/app_api#1149 and its backports to NC33, NC34 and NC35, `0.3.0` before.
+  With #1149 the check caches the version it reads for an hour, so the warning can outlive a HaRP update by
+  that long.
 - Before 0.4.3, `/info` reported the version as a float, which Nextcloud read as `0.4.0` whatever the real
   patch level was. On 0.4.3 and later it is a real `x.y.z` string, so the admin overview shows the truth.
 - Upgrading is `docker pull` plus recreate; ExApps reconnect their tunnels on their own. Verify with the
@@ -193,6 +196,7 @@ least 0.4.3 before investigating `503` bursts, and check host CPU pressure at th
 | Every ExApp request is `401` | Shared key mismatch between `HP_SHARED_KEY` and the daemon's `--harp_shared_key`, or a non-ASCII key. Re-register the daemon with the exact value |
 | One app is `404` with `<NOSRV>` in the log | That app is not deployed on this HaRP daemon (manual-install apps are served at `/index.php/apps/app_api/proxy/<appid>/...`) |
 | A route answers `403` for normal users | The route declares `access_level` USER or ADMIN; anonymous callers get `403` |
+| A request that used to work gets `405` | HaRP 0.4.8+ with an AppAPI that sends the route verbs checks the method: no route of that path lists it, and the reply's `Allow` header names the ones listed. The ExApp's `info.xml` must add the method to that route's `<verb>`; update the ExApp once it does |
 | Browser gets `502` on `/heartbeat`, `/init` or `/enabled` | Working as intended: infrastructure routes are not reachable from outside |
 | Every ExApp install ends in "heartbeat check failed" | The `/exapps/` rule on the Nextcloud reverse proxy is missing or wrong; AppAPI cannot reach `<nextcloud_url>/exapps/<appid>/heartbeat` |
 | Bursts of `503` across all ExApps under load | Agent stall. Upgrade to 0.4.3+, then look for host CPU starvation at those timestamps |
