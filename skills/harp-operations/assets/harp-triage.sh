@@ -39,7 +39,7 @@ started={{.State.StartedAt}}'
 # Collected before the probes below, so this tool's own requests do not show up as findings.
 # 401 and 404 are normal here (unsigned probes, GET /), so only 5xx and real errors are interesting.
 recent_errors=$(docker logs --since 30m "$HARP_CONTAINER" 2>&1 \
-    | grep -aEi ' 5[0-9][0-9] [0-9]+ |error|traceback|exception' \
+    | grep -aEi ' 5[0-9][0-9] [0-9]+ |error|traceback|exception|banned|dot segment' \
     | tail -20)
 
 section "Published ports"
@@ -86,7 +86,7 @@ docker exec "$HARP_CONTAINER" curl -s -o /dev/null -w '%{http_code}\n' --max-tim
     http://127.0.0.1:8780/ || echo "(request failed)"
 
 if [ -n "$NC_URL" ]; then
-    printf 'public %s/exapps/app_api/info (401 good, 404 rule missing, 502 rule points nowhere): ' "$NC_URL"
+    printf 'public %s/exapps/app_api/info (401 good, 404 rule missing, 502 or timeout: rule points nowhere or IP banned): ' "$NC_URL"
     curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 "$NC_URL/exapps/app_api/info" \
         || echo "(request failed)"
 else

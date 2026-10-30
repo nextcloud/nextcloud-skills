@@ -154,7 +154,7 @@ def public_exapps_path():
     """The /exapps/ reverse-proxy rule reaches HaRP (401), which installs depend on."""
     code = http_code(f"{NC_URL}/exapps/app_api/info")
     assert code == "401", (
-        f"expected 401, got {code}: 404 means the rule is missing, 502 means it points nowhere. "
+        f"expected 401, got {code}: 404 means the rule is missing, 502 or a timeout means it points nowhere or a ban. "
         "ExApp installs fail without this path")
     return "401 through the public URL"
 
