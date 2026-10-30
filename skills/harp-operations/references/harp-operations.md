@@ -66,14 +66,14 @@ Run these before changing anything. `<key>` is `HP_SHARED_KEY`.
 
 | Probe | Command | Healthy answer |
 |---|---|---|
-| Version and capabilities | `curl -s -H "harp-shared-key: <key>" http://<harp>:8780/exapps/app_api/info` | `{"version": "0.4.3", "docker": true, "kubernetes": {...}}` |
+| Version and capabilities | `curl -s -H "harp-shared-key: <key>" http://<harp>:8780/exapps/app_api/info` | `{"version": "0.4.8", "docker": true, "kubernetes": {...}}` |
 | Container health | `docker inspect <harp> --format '{{.State.Health.Status}}'` | `healthy` (built-in healthcheck, 10s interval, 9 retries) |
 | Frontend liveness | `curl -o /dev/null -w '%{http_code}' http://<harp>:8780/` | `404`, by design. Not a health signal, only proof something answers |
-| Public path | `curl -o /dev/null -w '%{http_code}' <nextcloud-url>/exapps/app_api/info` | `401`. `404` means the request fell through to Nextcloud, `502` means the proxy rule points nowhere |
+| Public path | `curl -o /dev/null -w '%{http_code}' <nextcloud-url>/exapps/app_api/info` | `401`. `404` means the request fell through to Nextcloud, `502` or a timeout means the proxy rule points nowhere or a ban |
 | Auth | the same `/info` call **without** the header | `401` |
 
 An unsigned `401` is a pass, not a failure: it proves the request reached HaRP and was rejected for the right
-reason.
+reason. Each one counts toward HaRP's IP ban (`HP_BLACKLIST_COUNT` per `HP_BLACKLIST_WINDOW`).
 
 ## Configuration that matters
 
@@ -143,7 +143,7 @@ cause.
 | `403` | The caller's level is below the route's `access_level` (anonymous on a USER or ADMIN route) |
 | `404` | Path not declared by the ExApp, or the app is not routable here (`<NOSRV>`), or `GET /` |
 | `405` | No route of that path lists the method in its `verb` (HaRP 0.4.8+); the `Allow` header names the listed ones |
-| `502` | An infrastructure route (`/heartbeat`, `/init`, `/enabled`) requested from outside, which is blocked by design, or a reverse-proxy rule pointing at nothing |
+| `502` | HaRP dropped the request without a reply: an infrastructure route (`/heartbeat`, `/init`, `/enabled`, in any spelling since 0.4.8) not sent by AppAPI, a path with `.` or `..` segments, or a banned client IP; or a reverse-proxy rule pointing at nothing. Across networks the request hangs until the proxy's read timeout (`504`) instead |
 | `503` | No healthy backend: the agent is stalled or overloaded |
 
 ## Upgrades and versions
@@ -153,8 +153,8 @@ cause.
   development build.
 - AppAPI enforces a floor (`Application::MINIMUM_HARP_VERSION`) and reports it through the `HarpVersionCheck`
   setup check: `0.4.8` with nextcloud/app_api#1149 and its backports to NC33, NC34 and NC35, `0.3.0` before.
-  With #1149 the check caches the version it reads for an hour, so the warning can outlive a HaRP update by
-  that long.
+  With #1149 the check caches a version below the minimum for an hour and a current one for a week, so the
+  warning clears within an hour of a HaRP update.
 - Before 0.4.3, `/info` reported the version as a float, which Nextcloud read as `0.4.0` whatever the real
   patch level was. On 0.4.3 and later it is a real `x.y.z` string, so the admin overview shows the truth.
 - Upgrading is `docker pull` plus recreate; ExApps reconnect their tunnels on their own. Verify with the
@@ -197,7 +197,8 @@ least 0.4.3 before investigating `503` bursts, and check host CPU pressure at th
 | One app is `404` with `<NOSRV>` in the log | That app is not deployed on this HaRP daemon (manual-install apps are served at `/index.php/apps/app_api/proxy/<appid>/...`) |
 | A route answers `403` for normal users | The route declares `access_level` USER or ADMIN; anonymous callers get `403` |
 | A request that used to work gets `405` | HaRP 0.4.8+ with an AppAPI that sends the route verbs checks the method: no route of that path lists it, and the reply's `Allow` header names the ones listed. The ExApp's `info.xml` must add the method to that route's `<verb>`; update the ExApp once it does |
-| Browser gets `502` on `/heartbeat`, `/init` or `/enabled` | Working as intended: infrastructure routes are not reachable from outside |
+| A request that used to work gets `403` (HaRP 0.4.8+) | The method's route (by `verb`) or the path read another way (letter case, a trailing slash, `;` parameters, `%2F`) has a higher access level, e.g. `/img/` when `^/img/.*` is PUBLIC and `.*` is USER; the ExApp must write that route as `^/img(/.*)?$` |
+| Browser gets `502` on `/heartbeat`, `/init` or `/enabled`, or on a path with `.` or `..` segments | Working as intended: HaRP drops these requests from outside |
 | Every ExApp install ends in "heartbeat check failed" | The `/exapps/` rule on the Nextcloud reverse proxy is missing or wrong; AppAPI cannot reach `<nextcloud_url>/exapps/<appid>/heartbeat` |
 | Bursts of `503` across all ExApps under load | Agent stall. Upgrade to 0.4.3+, then look for host CPU starvation at those timestamps |
 | Client IPs in logs and bans are all the proxy's | `HP_TRUSTED_PROXY_IPS` unset, quoted, or written with host bits on an image older than 0.4.3 |

@@ -456,7 +456,8 @@ of this contract in any language, with a reference app:
   (Quickstart Step 4) is missing or points at the wrong host/port, so AppAPI cannot reach
   `<nextcloud_url>/exapps/<appid>/heartbeat`. `DaemonCheck` and `HarpVersionCheck` stay green in this state, so
   probe the path itself: `curl -o /dev/null -w '%{http_code}' <nextcloud-url>/exapps/app_api/info` returns `401`
-  when it reaches HaRP, `404` when it falls through to Nextcloud, `502` when the rule points nowhere.
+  when it reaches HaRP, `404` when it falls through to Nextcloud, `502` or a timeout when the rule points nowhere or
+  the IP is banned.
 - **ExApp page loads but WebSockets/streaming fail**: the `/exapps/` rule is missing the `Upgrade`/`Connection`
   headers (Apache additionally needs `mod_proxy_wstunnel`).
 - **ExApp will not deploy**: image pull failing (registry/network). Check `docker ps -a` for `nc_app_*`, the
