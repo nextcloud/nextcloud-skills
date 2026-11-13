@@ -12,10 +12,11 @@ assistant can pick it up as context and help a colleague set up, verify and trou
 If you are helping someone **install or run** AppAPI, start at [Quickstart](#2-quickstart-zero-to-a-working-exapp)
 and [Troubleshooting](#10-troubleshooting-symptom-first).
 
-Applies to **Nextcloud 33, 34 and 35**. In the [nextcloud/app_api](https://github.com/nextcloud/app_api)
-repository, `main` is the NC35 dev line; released majors live on `stableXX` branches. Behavior that differs by
-version is called out in [Version notes](#11-version-notes-nc33--34--35). Source citations like
-`lib/Command/...` refer to the app_api sources.
+Applies to **Nextcloud 33, 34 and 35**, and to Nextcloud 36 where noted. In the
+[nextcloud/app_api](https://github.com/nextcloud/app_api) repository, `main` is the NC36 dev line; released
+majors live on `stableXX` branches. Behavior that differs by version is called out in
+[Version notes](#11-version-notes-nc33--34--35--36). Source citations like `lib/Command/...` refer to the
+app_api sources.
 
 For building the ExApp side, start at
 [exapp-development.md](../../exapp-development/references/exapp-development.md) (any language); Python
@@ -50,7 +51,7 @@ Last verified against: Nextcloud master (35), AppAPI 35.0.0-dev.1, HaRP 0.4.3, p
 8. [App store / fetcher](#8-app-store--fetcher)
 9. [Runtime and the ExApp contract](#9-runtime-and-the-exapp-contract)
 10. [Troubleshooting (symptom-first)](#10-troubleshooting-symptom-first)
-11. [Version notes (NC33 / 34 / 35)](#11-version-notes-nc33--34--35)
+11. [Version notes (NC33 / 34 / 35 / 36)](#11-version-notes-nc33--34--35--36)
 12. [Related links](#12-related-links)
 
 Throughout, `occ` means the Nextcloud server console. Where it runs depends on your install:
@@ -74,9 +75,9 @@ permissions and the web UI.
 - **Deploy Daemon**: the external service Nextcloud talks to in order to install, start/stop and reach ExApps.
   Without a configured Deploy Daemon, AppAPI cannot deploy anything, and Nextcloud shows the admin warning
   "AppAPI default deploy daemon is not set".
-- **HaRP** (`nextcloud/HaRP`): the recommended daemon (NC32+), a high-performance reverse proxy that proxies
-  the Docker Engine, routes requests straight to ExApps (bypassing PHP, enabling WebSockets), and uses FRP
-  tunnels so ExApps need not expose host ports.
+- **HaRP** (`nextcloud/HaRP`): the recommended daemon (NC32+) and the only Docker daemon on NC36, a
+  high-performance reverse proxy that proxies the Docker Engine, routes requests straight to ExApps (bypassing
+  PHP, enabling WebSockets), and uses FRP tunnels so ExApps need not expose host ports.
 - **nc_py_api**: the Python framework used to write ExApps that call back into Nextcloud through AppAPI.
 
 ExApps are **trusted, first-class apps**, comparable to PHP apps running inside Nextcloud: they authenticate
@@ -234,19 +235,99 @@ That is a working ExApp. From here, [Operating AppAPI](#7-operating-appapi) cove
 
 ## 3. Deploy daemons: which to use
 
-A HaRP daemon is **not** identified by its deploy type. Both HaRP and the legacy Docker Socket Proxy use the
-`docker-install` type; a daemon is HaRP when its `deploy_config` carries a `harp` sub-array
-(`HarpService::isHarp()`). The `--harp` flag on registration is what creates that array.
+A HaRP daemon is **not** identified by its deploy type. Both HaRP and the legacy Docker Socket Proxy (DSP) use
+the `docker-install` type; a daemon is HaRP when its `deploy_config` carries a `harp` sub-array
+(`HarpService::isHarp()`). The `--harp` flag on registration is what creates that array. Every
+`docker-install` daemon without it counts as DSP, including one whose host is a Docker socket path.
 
 | Deploy type | Class | When to use | Status |
 |---|---|---|---|
-| `docker-install` + `--harp` | `DockerActions` | Default. Docker host (local or remote) via HaRP | Recommended (NC32+) |
-| `docker-install` (no `--harp`) | `DockerActions` | Legacy Docker Socket Proxy (DSP) | Deprecated (see [Version notes](#11-version-notes-nc33--34--35)) |
+| `docker-install` + `--harp` | `DockerActions` | Default. Docker host (local or remote) via HaRP | Recommended (NC32+), the only Docker option on NC36 |
+| `docker-install` (no `--harp`) | `DockerActions` | Legacy Docker Socket Proxy (DSP) | Deprecated on NC34 and NC35, refused on NC36 (see [Docker Socket Proxy on NC36](#docker-socket-proxy-on-nc36)) |
 | `kubernetes-install` | `KubernetesActions` | Kubernetes cluster, always via HaRP | Supported (NC34+) |
 | `manual-install` | `ManualActions` | Local development; ExApp runs outside any orchestration ([dev-environment.md](../../nextcloud-dev-setup/references/dev-environment.md)) | Dev only |
 
 GPU: add `--compute_device cuda` (NVIDIA) or `--compute_device rocm` (AMD) to any daemon for AI ExApps
 (`cpu` is the default).
+
+### Docker Socket Proxy on NC36
+
+NC36 refuses new DSP daemons. `occ app_api:daemon:register` exits 1 with
+``Value error: Docker Socket Proxy is no longer supported, a `docker-install` daemon requires --harp.``, also
+when a daemon with that name already exists, so a script that re-registers one now fails instead of skipping.
+The admin settings refuse them too and no longer offer the DSP templates. NC33 to NC35 still register them
+(NC34 and NC35 with a deprecation warning).
+
+Existing DSP daemons stay registered on NC36 and their ExApps keep serving, but AppAPI no longer manages them:
+
+- `app_api:app:register` and `app_api:app:update` on them exit 2 ("Docker Socket Proxy daemons are no longer
+  supported"); **Test deploy** and the ExApp log download answer the same.
+- `app_api:app:enable` starts nothing: it checks the ExApp's heartbeat once (10 s) and, when the container is
+  not running, fails with the reason in the ExApp status. `app_api:app:disable` leaves the container running.
+- `app_api:app:unregister`, and removing the daemon in the admin UI, keep the container `nc_app_<appid>` and
+  its volume `nc_app_<appid>_data`.
+- The daemon can only be removed: editing it and `app_api:daemon:registry:add|remove` are refused.
+- The setup checks "AppAPI Docker Socket Proxy daemons" (names every DSP daemon) and "AppAPI deploy daemon"
+  (a DSP default daemon) report an error and link to the
+  [HaRP README migration steps](https://github.com/nextcloud/HaRP#migrating-exapps-from-docker-socket-proxy-to-harp).
+
+Move their ExApps to HaRP with the steps below.
+
+### Migrating ExApps from Docker Socket Proxy to HaRP
+
+Works on NC33 and later; on NC36 it is the only way to manage these ExApps again. HaRP names the container
+`nc_app_<appid>` and the volume `nc_app_<appid>_data` as DSP did, so an ExApp reinstalled through HaRP on the
+**same Docker Engine** replaces the old container and reuses its data. On another engine it starts empty.
+
+**Step 1. List what to move.** DSP daemons show `docker-install` in `Deploy ID` and `no` in `Is HaRP`; the
+daemon details in **Settings --> Administration --> AppAPI** show how many ExApps each has.
+
+```bash
+occ app_api:daemon:list
+occ app_api:app:list
+```
+
+Note how each ExApp was installed (App Store, or `--info-xml`/`--json-info`) and any `--env`/`--mount`
+options: unregister drops them. App config and user preferences survive (see the lifecycle notes).
+
+**Step 2. Run HaRP on the same Docker Engine and make it the default.** Follow
+[Quickstart](#2-quickstart-zero-to-a-working-exapp) Steps 2 to 6 with a new daemon name; for a DSP on another
+host, see [remote-daemon.md](remote-daemon.md). On AIO, enable the HaRP community container instead
+([aio.md](aio.md#moving-exapps-from-docker_aio-to-harp_aio)). Verify with the command below and **Test
+deploy** on the HaRP daemon in the admin settings:
+
+```bash
+occ app_api:daemon:list   # the HaRP row: "*" in Def, "yes" in Is HaRP
+```
+
+**Step 3. Move each ExApp.** Never pass `--rm-data` (in the UI, leave the delete-data option off): it deletes
+`nc_app_<appid>_data`. On NC36 the unregister keeps the old container and the HaRP install replaces it.
+
+```bash
+occ app_api:app:unregister <appid>
+occ app_api:app:register <appid> <harp-daemon> --wait-finish   # plus the source and options from Step 1
+```
+
+Verify:
+
+```bash
+occ app_api:app:list                                         # <appid> (<name>): <version> [enabled]
+docker volume inspect nc_app_<appid>_data --format '{{.CreatedAt}}'   # the old date: data reused
+```
+
+**Step 4. Remove the DSP daemon, then its container.** Use occ, not the admin UI: the UI removal also
+uninstalls any ExApp still on the daemon, and on NC33 to NC35 deletes their data volumes. Removing the DSP
+container needs explicit human approval.
+
+```bash
+occ app_api:daemon:unregister <dsp-daemon>   # refused while ExApps still use it
+docker rm -f <dsp-container>                 # e.g. nextcloud-appapi-dsp
+```
+
+Verify: `occ app_api:daemon:list` no longer lists the DSP daemon, and on NC36 the "AppAPI Docker Socket Proxy
+daemons" setup check passes. On NC36 an ExApp you unregistered but did not reinstall leaves its container
+running: remove it with `docker rm -f nc_app_<appid>`, and its data only with explicit human approval
+(`docker volume rm nc_app_<appid>_data`).
 
 ## 4. Setup cases (topologies)
 
@@ -257,7 +338,7 @@ GPU: add `--compute_device cuda` (NVIDIA) or `--compute_device rocm` (AMD) to an
 | Kubernetes (NC34+) | `--k8s --harp` (forces `kubernetes-install`) + `--k8s_expose_type` | FRP address not required for K8s; all K8s ops go through HaRP. Runbook: [kubernetes.md](kubernetes.md) |
 | Nextcloud AIO | auto-registered `harp_aio` daemon (`nextcloud-aio-harp:8780`) when HaRP is enabled (NC33+) | Managed by AIO. Runbook: [aio.md](aio.md) |
 | Local development | `manual-install` | ExApp process runs on your machine. Runbook: [dev-environment.md](../../nextcloud-dev-setup/references/dev-environment.md) |
-| Legacy Docker Socket Proxy | `docker-install` (no `--harp`) + `--haproxy_password` | Deprecated; migrate to HaRP |
+| Legacy Docker Socket Proxy (NC33 to NC35) | `docker-install` (no `--harp`) + `--haproxy_password` | Deprecated, refused on NC36; [migrate to HaRP](#migrating-exapps-from-docker-socket-proxy-to-harp) |
 
 ## 5. `occ app_api:daemon:register` reference
 
@@ -269,7 +350,7 @@ Source: `lib/Command/Daemon/RegisterDaemon.php`. Positional arguments (all requi
 | 2 | `display-name` | Human-readable name shown in the UI |
 | 3 | `accepts-deploy-id` | `manual-install`, `docker-install`, or `kubernetes-install` |
 | 4 | `protocol` | `http` or `https` (how Nextcloud connects to the daemon) |
-| 5 | `host` | Where the daemon is reachable, e.g. `<harp>:8780` or a Docker socket path |
+| 5 | `host` | Where the daemon is reachable, e.g. `<harp>:8780`; a Docker socket path only for a DSP daemon on NC33 to NC35 |
 | 6 | `nextcloud_url` | URL of this Nextcloud as reachable **from the ExApps**; it becomes each ExApp's `NEXTCLOUD_URL`. On a co-located single host it equals HaRP's `NC_INSTANCE_URL`; in split topologies (K8s, remote host) it may differ from what HaRP uses |
 
 Options:
@@ -277,7 +358,7 @@ Options:
 | Option | Meaning |
 |---|---|
 | `--net` | Docker network name (default `host`; `bridge` for `--k8s` daemons) |
-| `--haproxy_password` | Basic-auth password for a Docker Socket Proxy daemon (DSP only) |
+| `--haproxy_password` (NC33 to NC35) | Basic-auth password for a Docker Socket Proxy daemon (DSP only); removed in NC36 |
 | `--compute_device` | `cpu`, `cuda`, or `rocm` |
 | `--set-default` | Store as the default daemon (app config key `default_daemon_config`) |
 | `--harp` | Use HaRP for all Docker + ExApp communication |
@@ -297,8 +378,9 @@ Rules the command enforces:
 
 - `--harp` requires `--harp_shared_key`, and requires `--harp_frp_address` unless `--k8s` is set.
 - `--k8s` requires `--harp` and forces `accepts-deploy-id` to `kubernetes-install`.
-- Registering a plain `docker-install` daemon without `--harp` (DSP) prints a deprecation/removal warning on
-  NC34+ (see [Version notes](#11-version-notes-nc33--34--35)).
+- A plain `docker-install` daemon without `--harp` (DSP) registers with a deprecation warning on NC34 and NC35;
+  NC36 refuses it with exit 1, even for an existing name
+  (see [Docker Socket Proxy on NC36](#docker-socket-proxy-on-nc36)).
 - `--harp_exapp_direct` drops the reverse FRP tunnel, so the ExApp must be directly network-reachable by HaRP;
   `net=host` is disallowed in this mode. Only use it inside a trusted network segment.
 
@@ -352,14 +434,15 @@ Notes:
   a daemon with that `name` already exists (see [Troubleshooting](#10-troubleshooting-symptom-first)).
   Unregistering a daemon is **blocked while ExApps still use it**, and there is no command to move an installed
   ExApp between daemons: unregister the ExApp and reinstall it on the new daemon (its config survives, see the
-  lifecycle notes). That is also the DSP-to-HaRP migration path.
+  lifecycle notes). That is also the
+  [DSP-to-HaRP migration path](#migrating-exapps-from-docker-socket-proxy-to-harp).
 - **Logs**: ExApp containers are prefixed `nc_app_` (`docker logs nc_app_<appid>`); the daemon logs live in
   the HaRP container; Nextcloud-side errors are in the Nextcloud log.
 - **Health checks**: the shipped admin setup checks are `DaemonCheck` (daemon reachable, default set) and
-  `HarpVersionCheck` (HaRP new enough); they are the built-in post-install verification. The NC35 dev line
-  (app_api `main`) additionally has ExApp-surfaced checks (`ExAppsErrorSetupCheck`, `ExAppsWarningSetupCheck`)
-  that raise ExApp-reported errors and "not responding" warnings into the admin overview; merged in `main`,
-  not yet in a stable release. Background jobs such as `ExAppInitStatusCheckJob` and
+  `HarpVersionCheck` (HaRP new enough); they are the built-in post-install verification. From NC35, the
+  ExApp-surfaced checks (`ExAppsErrorSetupCheck`, `ExAppsWarningSetupCheck`) also raise ExApp-reported errors
+  and "not responding" warnings into the admin overview, and NC36 adds `DockerSocketProxyCheck`, which names
+  the remaining DSP daemons. Background jobs such as `ExAppInitStatusCheckJob` and
   `ExAppSetupChecksRefreshJob` refresh ExApp init/health state.
 - **Certificates**: Nextcloud's certificate store (`occ security:certificates`) is pushed into every ExApp
   container at **deploy time** (all daemon types), so ExApps trust the same CAs as Nextcloud, including
@@ -470,37 +553,42 @@ of this contract in any language, with a reference app:
 - **`HarpVersionCheck` warns**: the HaRP container is older than the minimum supported version; update the
   HaRP image (`:release`).
 - **GPU ExApp not using the GPU**: register the daemon with `--compute_device cuda|rocm`.
-- **DSP deprecation warnings**: expected on NC34+; migrate the daemon to HaRP (`--harp`).
+- **DSP deprecation warnings** (NC34, NC35): move the ExApps to HaRP
+  ([migration steps](#migrating-exapps-from-docker-socket-proxy-to-harp)).
+- **Docker Socket Proxy "no longer supported"** (NC36) from occ, Test deploy, a setup check or the
+  Nextcloud log: the daemon is DSP, which NC36 does not manage
+  ([what still works](#docker-socket-proxy-on-nc36)); move its ExApps to HaRP.
+- **ExApp on a DSP daemon fails to enable** (NC36; its status says it does not answer the heartbeat): its
+  container is not running. `docker start nc_app_<appid>` and enable again, or move it to HaRP.
 - **Changed an ExApp's code but the running container is unchanged**: rebuilds never apply automatically, and
   same-version updates are a no-op; the redeploy loops are in
   [exapp-ai-maintenance.md](../../exapp-maintenance/references/exapp-ai-maintenance.md).
 
-## 11. Version notes (NC33 / 34 / 35)
+## 11. Version notes (NC33 / 34 / 35 / 36)
 
-In the app_api repository, `main` is the NC35 dev line; released majors are `stableXX` branches. There is no
+In the app_api repository, `main` is the NC36 dev line; released majors are `stableXX` branches. There is no
 runtime Nextcloud-version gating in the deploy/registration code, so these differences are which code shipped
 in which major.
 
-| Capability | NC33 | NC34 | NC35 (dev) |
-|---|---|---|---|
-| HaRP daemon | yes | yes | yes |
-| Legacy DSP (`docker-install`, no `--harp`) | yes, no deprecation warning | yes, deprecation warning | present, removal targeted |
-| Kubernetes (`kubernetes-install`, `--k8s*`) | no | yes | yes |
-| `daemon:register` options | 9 (Docker/HaRP options, no `--k8s*`) | 16 (adds `--k8s*`) | 16 |
-| AIO auto-daemon | `docker_aio` + `harp_aio` (neither deprecated) | `docker_aio` deprecated, `harp_aio` | `harp_aio` (`docker_aio` deprecated) |
-| Connection/HaRP setup checks | `DaemonCheck`, `HarpVersionCheck` | same | same |
-| ExApp-surfaced setup checks | no | no | yes (in `main`, not yet in a stable release) |
-| AppAPI available during maintenance mode | no | no | yes (occ + HaRP control routes) |
+| Capability | NC33 | NC34 | NC35 | NC36 (dev) |
+|---|---|---|---|---|
+| HaRP daemon | yes | yes | yes | yes, the only Docker daemon |
+| Legacy DSP (`docker-install`, no `--harp`) | yes, no deprecation warning | yes, deprecation warning | yes, deprecation warning | refused; existing ones stay, unmanaged |
+| Kubernetes (`kubernetes-install`, `--k8s*`) | no | yes | yes | yes |
+| `daemon:register` options | 9 (Docker/HaRP options, no `--k8s*`) | 16 (adds `--k8s*`) | 16 | 15 (drops `--haproxy_password`) |
+| AIO auto-daemon | `docker_aio` + `harp_aio` (neither deprecated) | `docker_aio` deprecated, `harp_aio` | `harp_aio` (`docker_aio` deprecated) | `harp_aio` only |
+| Connection/HaRP setup checks | `DaemonCheck`, `HarpVersionCheck` | same | same | adds `DockerSocketProxyCheck` |
+| ExApp-surfaced setup checks | no | no | yes | yes |
+| AppAPI available during maintenance mode | no | no | yes (occ + HaRP control routes) | yes |
 
-- The `--harp_*` flags are stable across NC33-35. The `--k8s_*` flags and `KubernetesActions` arrived in NC34.
-- `harp_aio` auto-registration exists from NC33; the NC34 change was deprecating `docker_aio` (removal
-  targeted for NC35).
-- A hard stop that forbids registering **new** DSP daemons is planned for NC35 but is not in released code as
-  of this writing; treat DSP as deprecated everywhere and prefer HaRP.
-- ExApp-surfaced setup checks (`ExAppsErrorSetupCheck`, `ExAppsWarningSetupCheck`) are merged into app_api
-  `main` for NC35 but not yet in a stable release; only `DaemonCheck` and `HarpVersionCheck` ship in released
-  versions today.
-- On NC35, maintenance mode keeps `occ app_api:*` and the HaRP control routes available while ExApp user
+- The `--harp_*` flags are stable across NC33-36. The `--k8s_*` flags and `KubernetesActions` arrived in NC34.
+- `harp_aio` auto-registration exists from NC33; NC34 deprecated `docker_aio`, and NC36 no longer registers it
+  ([aio.md](aio.md)).
+- NC34 and NC35 still register DSP daemons; their warning names NC35 as the removal release, but the removal
+  is in NC36 ([Docker Socket Proxy on NC36](#docker-socket-proxy-on-nc36)).
+- ExApp-surfaced setup checks (`ExAppsErrorSetupCheck`, `ExAppsWarningSetupCheck`) ship from NC35; NC33 and
+  NC34 have only `DaemonCheck` and `HarpVersionCheck`.
+- From NC35, maintenance mode keeps `occ app_api:*` and the HaRP control routes available while ExApp user
   traffic is rejected (see [Operating AppAPI](#7-operating-appapi)); NC33/34 do not load app_api during
   maintenance at all.
 
@@ -511,7 +599,8 @@ in which major.
 - **nc_py_api** (build ExApps in Python): https://github.com/cloud-py-api/nc_py_api
 - **nextcloud-docker-dev** (development environment): https://github.com/nextcloud/nextcloud-docker-dev
 - **HaRP**: https://github.com/nextcloud/HaRP
-- **Docker Socket Proxy** (legacy): https://github.com/nextcloud/docker-socket-proxy
+- **Docker Socket Proxy** (deprecated on NC34 and NC35, removed in NC36):
+  https://github.com/nextcloud/docker-socket-proxy
 - **Admin docs**: https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/
   ([AppAPI and External Apps](https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/AppAPIAndExternalApps.html),
   [Deployment configurations](https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/DeployConfigurations.html))
