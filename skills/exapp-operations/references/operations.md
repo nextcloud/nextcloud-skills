@@ -269,7 +269,7 @@ Existing DSP daemons stay registered on NC36 and their ExApps keep serving, but 
 - The daemon can only be removed: editing it and `app_api:daemon:registry:add|remove` are refused.
 - The setup checks "AppAPI Docker Socket Proxy daemons" (names every DSP daemon) and "AppAPI deploy daemon"
   (a DSP default daemon) report an error and link to the
-  [HaRP README migration steps](https://github.com/nextcloud/HaRP#nextcloud-32-migrating-existing-exapps-from-dsp-to-harp).
+  [HaRP README migration steps](https://github.com/nextcloud/HaRP#migrating-exapps-from-docker-socket-proxy-to-harp).
 
 Move their ExApps to HaRP with the steps below.
 
