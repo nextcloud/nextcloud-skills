@@ -19,11 +19,13 @@ install/upgrade (`lib/DeployActions/AIODockerActions.php`, `lib/Migration/DataIn
 - With AIO's **HaRP container** enabled (`HARP_ENABLED` + `HP_SHARED_KEY` set by AIO), AppAPI registers
   **`harp_aio`** (`nextcloud-aio-harp:8780`, network `nextcloud-aio`, HaRP direct-connect mode) and makes it
   the default. Exists on NC33+.
-- With the legacy **Docker Socket Proxy** container, AppAPI registers **`docker_aio`**
-  (`nextcloud-aio-docker-socket-proxy:2375`). Deprecated since NC34, removal targeted for NC35.
-- If both are enabled, `harp_aio` wins the default. Registration is idempotent and AppAPI never removes a
-  daemon it registered: after a DSP-to-HaRP migration, `docker_aio` stays behind; clean it up with
-  `occ app_api:daemon:unregister docker_aio` once no ExApps use it.
+- With the legacy **Docker Socket Proxy** container, NC33 to NC35 register **`docker_aio`**
+  (`nextcloud-aio-docker-socket-proxy:2375`), deprecated since NC34. NC36 registers nothing for it; the
+  app_api install or upgrade only warns
+  `Docker Socket Proxy is enabled in AIO, but AppAPI no longer supports it. Use HaRP instead.`
+- On NC33 to NC35, if both are enabled, `harp_aio` wins the default. Registration is idempotent and AppAPI
+  never removes a daemon it registered: a `docker_aio` from an earlier version stays behind, and NC36 no
+  longer manages it. Move its ExApps to `harp_aio` with the steps below.
 - AIO's own web server container routes `/exapps/` to HaRP internally, so the `operations.md` Quickstart
   Step 4 proxy rule is only needed on a reverse proxy **in front of** AIO, if you run one.
 
@@ -43,7 +45,37 @@ install/upgrade (`lib/DeployActions/AIODockerActions.php`, `lib/Migration/DataIn
   (a second daemon competes with it, and re-registering the same name is a no-op).
 - Do **not** edit `harp_aio`'s host or shared key by hand; AIO owns `HP_SHARED_KEY` and a mismatch breaks
   Nextcloud-to-HaRP auth.
-- Do not re-default the deprecated `docker_aio`; migrate to HaRP and unregister it.
+- Do not re-default `docker_aio` (deprecated on NC34 and NC35, unmanaged on NC36); move its ExApps to
+  `harp_aio` and unregister it.
+
+## Moving ExApps from `docker_aio` to `harp_aio`
+
+Needed on NC36, where `docker_aio` is no longer managed; the same steps work on NC33 to NC35. Both daemons use
+AIO's Docker Engine, so a reinstalled ExApp reuses its data volume. Details and the NC36 behavior:
+[operations.md](operations.md#migrating-exapps-from-docker-socket-proxy-to-harp).
+
+1. Enable the HaRP community container (What the admin does, step 1). A newly registered `harp_aio` becomes
+   the default; if `harp_aio` existed before, set it as default in **Settings --> Administration --> AppAPI**.
+
+   ```bash
+   occ app_api:daemon:list   # "*" in Def on the harp_aio row
+   ```
+
+2. Move each ExApp, never with `--rm-data` (it deletes the data volume):
+
+   ```bash
+   occ app_api:app:unregister <appid>
+   occ app_api:app:register <appid> harp_aio --wait-finish
+   occ app_api:app:list      # <appid> (<name>): <version> [enabled]
+   ```
+
+3. Remove `docker_aio` with occ (the admin UI removal also uninstalls any ExApp still on it, and on NC33 to
+   NC35 deletes their data volumes), then disable AIO's Docker Socket Proxy container:
+
+   ```bash
+   occ app_api:daemon:unregister docker_aio   # refused while ExApps still use it
+   occ app_api:daemon:list                    # docker_aio is gone
+   ```
 
 ## Troubleshooting
 
@@ -53,6 +85,9 @@ install/upgrade (`lib/DeployActions/AIODockerActions.php`, `lib/Migration/DataIn
 - **HaRP enabled but no `harp_aio` daemon**: the Nextcloud container was not recreated after enabling HaRP,
   so the env vars are missing inside it. Restart/recreate the AIO containers; the (idempotent) registration
   re-runs on the next app_api install/upgrade repair step.
+- **NC36 setup check "AppAPI Docker Socket Proxy daemons" names `docker_aio`, or no default daemon while
+  only AIO's Docker Socket Proxy is enabled**: NC36 does not use it. Enable the HaRP community container and
+  move the ExApps (above).
 - **ExApp installs fine but its page is blank / WebSocket fails, only behind your own proxy**: the reverse
   proxy in front of AIO does not forward `/exapps/` (with WebSocket upgrade). The internal checks pass anyway;
   add the rule from `operations.md` Quickstart Step 4 pointing at AIO.
